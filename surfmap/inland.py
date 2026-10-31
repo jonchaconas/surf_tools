@@ -64,10 +64,10 @@ def points(name):
     return np.round(la[keep], 3), np.round(lo[keep], 3)
 
 
-def _season(year):
+def _window(year, month):
     """Date range matching the days WW3 has, so both sources cover the same mornings."""
-    stamps = [t for m in config.MONTHS for t in ww3.available_hours(year, m)]
-    return min(stamps).date(), max(stamps).date()
+    stamps = ww3.available_hours(year, month)
+    return stamps[0].date(), stamps[-1].date()
 
 
 class _Throttle:
@@ -94,7 +94,12 @@ def _request(lats, lons, d0, d1, tries=10):
         timezone="GMT",
     )
     for _ in range(tries):
-        r = requests.get(API, params=params, timeout=180)
+        try:
+            r = requests.get(API, params=params, timeout=180)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            print(f"  Open-Meteo {type(e).__name__}; retrying", flush=True)
+            time.sleep(30)
+            continue
         if r.status_code == 429 or not r.content:
             print(f"  Open-Meteo throttled ({r.status_code}: {r.text[:120]}); waiting", flush=True)
             time.sleep(65)
@@ -111,11 +116,11 @@ def fetch():
     for name in BASINS:
         lats, lons = points(name)
         print(f"{name}: {len(lats)} points", flush=True)
-        for year in config.YEARS:
-            d0, d1 = _season(year)
+        for year, month in sorted({(y, m) for m in config.MONTHS for y in config.seasons(m)}):
+            d0, d1 = _window(year, month)
             per_loc = max(1.0, ((d1 - d0).days + 1) / 14)
             for k in range(0, len(lats), CHUNK):
-                path = OUT / f"{name}_{year}_{k // CHUNK:02d}.json"
+                path = OUT / f"{name}_{year}-{month:02d}_{k // CHUNK:02d}.json"
                 if path.exists():
                     continue
                 la, lo = lats[k:k + CHUNK], lons[k:k + CHUNK]
@@ -139,7 +144,7 @@ def load(month):
     raw = {}
     for name in BASINS:
         series = {}
-        for path in sorted(OUT.glob(f"{name}_*.json")):
+        for path in sorted(OUT.glob(f"{name}_*-{month:02d}_*.json")):
             for row in json.loads(path.read_text()):
                 lat, lon = row["requested"]
                 t = np.array(row["hourly"]["time"], dtype="datetime64[h]")

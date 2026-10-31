@@ -31,7 +31,7 @@ PC = ccrs.PlateCarree()
 HALO = [pe.withStroke(linewidth=2.2, foreground="white")]
 
 INSETS = [  # title, basins it shows, extent (lon0, lon1, lat0, lat1)
-    ("Great Lakes", ("great_lakes",), (-92.8, -75.5, 40.8, 49.3)),
+    ("Great Lakes", ("great_lakes",), (-94.2, -75.5, 40.8, 49.3)),
     ("Mediterranean & Black Sea", ("mediterranean", "black_sea"), (-6.5, 42.5, 30.0, 47.5)),
     ("Caspian Sea", ("caspian",), (45.8, 55.5, 36.2, 47.5)),
 ]
@@ -113,12 +113,28 @@ def _inset(fig, rect, title, basins, extent, field, nodata, land, spots):
     ax.set_title(title, fontsize=9.5, weight="bold", loc="left", pad=4)
 
 
+def _inset_rects(fig, bottom, height, left=0.02, right=0.98):
+    """Inset boxes sized to each map's projected aspect, spread with equal gaps across the page."""
+    fw, fh = fig.get_size_inches()
+    widths = []
+    for _, _, (lon0, lon1, lat0, lat1) in INSETS:
+        proj = ccrs.Mercator(central_longitude=(lon0 + lon1) / 2)
+        (x0, y0, _), (x1, y1, _) = proj.transform_points(PC, np.array([lon0, lon1]), np.array([lat0, lat1]))
+        widths.append(height * fh * (x1 - x0) / (y1 - y0) / fw)
+    gap = (right - left - sum(widths)) / (len(widths) - 1)
+    x, rects = left, []
+    for w in widths:
+        rects.append([x, bottom, w, height])
+        x += w + gap
+    return rects
+
+
 def _colorbar(fig, rect, mappable):
     cax = fig.add_axes(rect)
-    cb = fig.colorbar(mappable, cax=cax, orientation="horizontal", ticks=LEVELS, spacing="uniform")
+    cb = fig.colorbar(mappable, cax=cax, orientation="horizontal", spacing="uniform")
     cb.outline.set_visible(False)
+    cb.set_ticks(LEVELS, labels=[f"{v}%" for v in LEVELS])
     cb.ax.tick_params(labelsize=8, length=0, colors=INK_2)
-    cb.ax.set_xticklabels([f"{v}%" for v in LEVELS])
     cax.set_title("Share of mornings with good-or-better surf", fontsize=8.5, color=INK_2, loc="left", pad=3)
     fig.patches.append(matplotlib.patches.Rectangle(
         (rect[0] + rect[2] + 0.02, rect[1]), 0.022, rect[3], transform=fig.transFigure,
@@ -148,18 +164,16 @@ def page(pdf, month, land):
     fig.text(0.02, 0.925, f"Share of mornings with good-or-better surf in the wave-model record, "
              f"{_years_text(m)}", fontsize=11.5, color=INK_2, va="top")
 
-    ax = fig.add_axes([0.015, 0.355, 0.73, 0.555], projection=ccrs.Robinson(central_longitude=10))
+    ax = fig.add_axes([0.015, 0.375, 0.73, 0.54], projection=ccrs.Robinson(central_longitude=10))
     ax.set_global()
     _draw(ax, field, nodata, land)
     _label_spots(ax, [s for s in spots if s["basin"] is None])
-    _colorbar(fig, [0.06, 0.322, 0.46, 0.013], ax.collections[0])
+    _colorbar(fig, [0.06, 0.345, 0.46, 0.013], ax.collections[0])
 
-    _table(fig, [0.77, 0.33, 0.215, 0.6], spots, name)
+    _table(fig, [0.77, 0.36, 0.215, 0.57], spots, name)
 
-    x = 0.02
-    for (title, basins, extent), w in zip(INSETS, (0.27, 0.48, 0.16)):
-        _inset(fig, [x, 0.075, w, 0.2], title, basins, extent, field, nodata, land, spots)
-        x += w + 0.02
+    for (title, basins, extent), rect in zip(INSETS, _inset_rects(fig, bottom=0.068, height=0.235)):
+        _inset(fig, rect, title, basins, extent, field, nodata, land, spots)
 
     fig.text(0.02, 0.045, rating.rule_text(), fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.028,

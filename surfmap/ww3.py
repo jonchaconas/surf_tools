@@ -75,8 +75,8 @@ def _segments(stamps):
 
 
 def _jobs():
-    for year in config.YEARS:
-        for month in config.MONTHS:
+    for month in config.MONTHS:
+        for year in config.seasons(month):
             for seg in _segments(available_hours(year, month)):
                 for lon0 in range(0, 360, BAND):
                     h = band_hour(lon0)
@@ -125,7 +125,7 @@ def load(month):
     bands = []
     for lon0 in range(0, 360, BAND):
         parts = []
-        for year in config.YEARS:
+        for year in config.seasons(month):
             for path in sorted(OUT.glob(f"{year}-{month:02d}_lon{lon0:03d}_d*.nc")):
                 ds = xr.open_dataset(path).squeeze("depth", drop=True)
                 ds = ds.assign_coords(day=ds.time.dt.floor("D")).swap_dims(time="day").drop_vars("time")
@@ -139,7 +139,7 @@ def load(month):
 
 def days(month):
     """Every UTC date in the month that has at least one model hour."""
-    return sorted({t.date() for y in config.YEARS for t in available_hours(y, month)})
+    return sorted({t.date() for y in config.seasons(month) for t in available_hours(y, month)})
 
 
 def spot_cell(ds, lat, lon, max_km=250):

@@ -1,13 +1,20 @@
 """Seasons, sampling time and the good+ rule, shared by every data source."""
 
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
-# Open-Meteo only has swell partitions from Oct 2021, so every source uses these seasons.
-YEARS = range(2021, 2026)
 MONTHS = (11, 12)
+N_SEASONS = 5  # Open-Meteo only has swell partitions from Oct 2021, which caps the record
+
+
+def seasons(month):
+    """The N_SEASONS most recent years in which this calendar month is complete."""
+    today = date.today()
+    last = today.year if month < today.month else today.year - 1
+    return range(last - N_SEASONS + 1, last + 1)
 
 # Each day is judged on one snapshot near this local solar hour (dawn-patrol conditions).
 LOCAL_HOUR = 8
