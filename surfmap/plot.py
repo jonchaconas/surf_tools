@@ -57,10 +57,12 @@ def _draw(ax, field, nodata, land, rows=slice(None), cols=slice(None)):
     nd = ax.contourf(lo, la, nodata[rows][:, cols].astype(float), levels=[0.5, 1.5],
                      colors=[NODATA], hatches=["////"], transform=PC, zorder=1.5)
     nd.set_rasterized(True)
-    ax.add_feature(land, facecolor=LAND, edgecolor="none", zorder=2)
-    ax.add_feature(cfeature.COASTLINE.with_scale("50m"), edgecolor=COAST, linewidth=0.3, zorder=3)
+    # Rasterized: as vectors the 1:50m outlines make each page ~4 MB instead of ~1 MB.
+    ax.add_feature(land, facecolor=LAND, edgecolor="none", zorder=2, rasterized=True)
+    ax.add_feature(cfeature.COASTLINE.with_scale("50m"), edgecolor=COAST, linewidth=0.3, zorder=3,
+                   rasterized=True)
     ax.add_feature(cfeature.LAKES.with_scale("50m"), facecolor="none", edgecolor=COAST,
-                   linewidth=0.3, zorder=3)
+                   linewidth=0.3, zorder=3, rasterized=True)
     ax.spines["geo"].set_edgecolor(COAST)
     ax.spines["geo"].set_linewidth(0.5)
 
@@ -88,13 +90,35 @@ def _label_spots(ax, spots, n=16, min_sep=7.0):
                 color=INK, transform=PC, zorder=6, path_effects=HALO)
 
 
+TABLE_SEP_KM = 161  # 100 miles: one entry per stretch of coast, the best-ranked one
+
+
+def _km(a, b):
+    """Great-circle distance between two spots."""
+    la1, lo1, la2, lo2 = map(np.radians, (a["lat"], a["lon"], b["lat"], b["lon"]))
+    h = np.sin((la2 - la1) / 2) ** 2 + np.cos(la1) * np.cos(la2) * np.sin((lo2 - lo1) / 2) ** 2
+    return 2 * 6371 * np.arcsin(np.sqrt(h))
+
+
+def _distinct(spots, n):
+    """The best n spots, skipping any within TABLE_SEP_KM of one already chosen."""
+    chosen = []
+    for s in spots:
+        if all(_km(s, c) >= TABLE_SEP_KM for c in chosen):
+            chosen.append(s)
+            if len(chosen) == n:
+                break
+    return chosen
+
+
 def _table(fig, rect, spots, month_name):
     ax = fig.add_axes(rect)
     ax.axis("off")
     ax.text(0, 1, f"Best named breaks in {month_name}", fontsize=12, weight="bold", va="top")
-    ax.text(0, 0.968, "% of mornings that are good+ with swell\ninside the break's exposure window",
+    ax.text(0, 0.968, "% of mornings that are good+ with swell inside the break's\n"
+            "exposure window; best break per 100 miles of coast",
             fontsize=8, color=INK_2, va="top", linespacing=1.3)
-    top = [s for s in spots if s["basin"] is None][:24]
+    top = _distinct([s for s in spots if s["basin"] is None], 24)
     y, step = 0.905, 0.0375
     for i, s in enumerate(top, 1):
         ax.text(0.0, y, f"{i}", fontsize=8.5, color=INK_3, va="top")
