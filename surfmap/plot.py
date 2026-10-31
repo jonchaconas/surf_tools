@@ -18,11 +18,12 @@ from shapely.ops import unary_union
 from . import config, inland, rating
 from .analysis import LAT, LON, Month
 
-# Sequential blue ramp (light = rarely good, dark = usually good); the first step is
-# lighter than the ramp so "essentially never" recedes toward the page.
+# Red (rarely good) through pale yellow (~the open-ocean median) to green (usually good).
+# The green end is much darker than the red end, so red-green colour-blind readers can
+# still tell the extremes apart by lightness.
 LEVELS = [0, 2, 5, 10, 15, 20, 30, 40, 50, 60, 80, 100]
-COLORS = ["#f3f7fd", "#cde2fb", "#b7d3f6", "#9ec5f4", "#86b6ef", "#6da7ec",
-          "#5598e7", "#3987e5", "#256abf", "#184f95", "#0d366b"]
+COLORS = ["#d73027", "#f46d43", "#fdae61", "#fee08b", "#ffffbf", "#d9ef8b",
+          "#a6d96a", "#66bd63", "#1a9850", "#006837", "#00441b"]
 CMAP, NORM = ListedColormap(COLORS), BoundaryNorm(LEVELS, len(COLORS))
 
 INK, INK_2, INK_3 = "#1a1a19", "#4a4a47", "#7a7a76"
