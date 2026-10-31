@@ -65,6 +65,13 @@ def _draw(ax, field, nodata, land, rows=slice(None), cols=slice(None)):
     ax.spines["geo"].set_linewidth(0.5)
 
 
+def _swell_arrows(ax, lon, lat, u, v):
+    q = ax.quiver(lon, lat, u, v, transform=PC, pivot="middle", color=INK, alpha=0.8,
+                  scale=55, width=0.0013, headwidth=4.5, headlength=5, headaxislength=4.5, zorder=4)
+    q.set_path_effects([pe.withStroke(linewidth=1.2, foreground="white", alpha=0.6)])
+    return q
+
+
 def _label_spots(ax, spots, n=16, min_sep=7.0):
     """Dots for every break; names for the best few, skipping ones crowded by a better neighbour."""
     lons = [s["lon"] for s in spots]
@@ -97,7 +104,7 @@ def _table(fig, rect, spots, month_name):
         y -= step
 
 
-def _inset(fig, rect, title, basins, extent, field, nodata, land, spots):
+def _inset(fig, rect, title, basins, extent, field, nodata, land, spots, ready):
     lon0, lon1, lat0, lat1 = extent
     ax = fig.add_axes(rect, projection=ccrs.Mercator(central_longitude=(lon0 + lon1) / 2))
     ax.set_extent(extent, crs=PC)
@@ -112,6 +119,10 @@ def _inset(fig, rect, title, basins, extent, field, nodata, land, spots):
         ax.text(s["lon"], s["lat"] + 0.012 * (lat1 - lat0) * 3, f"{s['name']} {s['pct']:.0f}%",
                 fontsize=6.5, ha="center", va="bottom", transform=PC, zorder=6, path_effects=HALO)
     ax.set_title(title, fontsize=9.5, weight="bold", loc="left", pad=4)
+    if any(b not in ready for b in basins):
+        ax.text(0.5, 0.5, "Open-Meteo data for this month\nis still downloading", transform=ax.transAxes,
+                ha="center", va="center", fontsize=8.5, color=INK_2, zorder=7,
+                bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor=COAST, linewidth=0.5))
 
 
 def _inset_rects(fig, bottom, height, left=0.02, right=0.98):
@@ -132,9 +143,9 @@ def _inset_rects(fig, bottom, height, left=0.02, right=0.98):
 
 def _colorbar(fig, rect, mappable):
     cax = fig.add_axes(rect)
-    cb = fig.colorbar(mappable, cax=cax, orientation="horizontal", spacing="uniform")
+    cb = fig.colorbar(mappable, cax=cax, orientation="horizontal", spacing="uniform", ticks=LEVELS,
+                      format=matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:g}%"))
     cb.outline.set_visible(False)
-    cb.set_ticks(LEVELS, labels=[f"{v}%" for v in LEVELS])
     cb.ax.tick_params(labelsize=8, length=0, colors=INK_2)
     cax.set_title("Share of mornings with good-or-better surf", fontsize=8.5, color=INK_2, loc="left", pad=3)
     fig.patches.append(matplotlib.patches.Rectangle(
@@ -168,13 +179,17 @@ def page(pdf, month, land):
     ax = fig.add_axes([0.015, 0.375, 0.73, 0.54], projection=ccrs.Robinson(central_longitude=10))
     ax.set_global()
     _draw(ax, field, nodata, land)
+    arrows = _swell_arrows(ax, *m.swell_arrows())
     _label_spots(ax, [s for s in spots if s["basin"] is None])
     _colorbar(fig, [0.06, 0.345, 0.46, 0.013], ax.collections[0])
+    ax.quiverkey(arrows, 0.715, 0.3515, 1, "Predominant swell direction (power-weighted;\n"
+                 "omitted where swell comes from mixed directions)", coordinates="figure",
+                 labelpos="E", labelsep=0.08, fontproperties=dict(size=7.5), labelcolor=INK_2)
 
     _table(fig, [0.77, 0.36, 0.215, 0.57], spots, name)
 
     for (title, basins, extent), rect in zip(INSETS, _inset_rects(fig, bottom=0.068, height=0.235)):
-        _inset(fig, rect, title, basins, extent, field, nodata, land, spots)
+        _inset(fig, rect, title, basins, extent, field, nodata, land, spots, m.basins)
 
     fig.text(0.02, 0.045, rating.rule_text(), fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.028,
@@ -185,6 +200,9 @@ def page(pdf, month, land):
     ratio = next((b["tp_ratio"] for b in m.basins.values() if b["tp_ratio"]), None)
     lakes = (f" Open-Meteo has no swell peak period on the Great Lakes; it is taken as {ratio:.2f}× the mean "
              f"swell period, the median ratio in the other seas." if ratio else "")
+    if len(m.basins) < len(inland.BASINS):
+        lakes += (" Enclosed-sea data for this month is still downloading (Open-Meteo free-tier quota), "
+                  "so those seas show as no data until the PDF is rebuilt.")
     fig.text(0.02, 0.011,
              "Offshore sea state only: bathymetry, sheltering, tide and wind direction at each break are not modelled. "
              "Break percentages use the nearest seaward model cell within 250 km." + lakes,

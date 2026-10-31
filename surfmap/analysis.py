@@ -5,7 +5,7 @@ from functools import lru_cache
 import cartopy.io.shapereader as shp
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator, griddata
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import binary_dilation, distance_transform_edt
 from shapely import contains_xy
 from shapely.geometry import Point
 from shapely.ops import unary_union
@@ -90,8 +90,36 @@ class Month:
             sub[inside] = np.where(np.isnan(lin), near, lin)
             grid[np.ix_(rows, cols)] = sub
 
-        nodata = water_mask() & np.isnan(grid)
+        water = water_mask()
+        nodata = water & np.isnan(grid)
+        # Grow the mask onto land too, so the land layer's finer coastline leaves no slivers of
+        # extrapolated colour along shores without data. Real water data is never covered.
+        nodata |= binary_dilation(nodata, iterations=2) & ~water
         return _fill_nearest(grid), nodata
+
+    def swell_arrows(self, step=10, min_consistency=0.3):
+        """Predominant swell heading on a coarse open-ocean grid: (lon, lat, u, v) unit vectors.
+
+        Mornings are averaged as vectors pointing where the swell travels, weighted by
+        wave power (Hs^2 * Tp). Cells whose mean vector is under min_consistency of the
+        total weight have no predominant direction and are left out.
+        """
+        ds = self.ocean
+        hs, tp, frm = ds.shgt.values, ds.sper.values, ds.sdir.values
+        w = np.nan_to_num(hs**2 * tp)
+        heading = np.radians(frm + 180)
+        u, v = np.nansum(w * np.sin(heading), 0), np.nansum(w * np.cos(heading), 0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            consistency = np.hypot(u, v) / w.sum(0)
+        ocean = np.isfinite(hs).mean(0) > 0.5
+        rows = np.isclose((ds.lat.values + step / 4) % step, 0)  # -72.5, -62.5, ... 77.5
+        cols = np.isclose(ds.lon.values % step, step / 2)          # -175, -165, ... 175
+        keep = np.zeros_like(ocean)
+        keep[np.ix_(rows, cols)] = True
+        keep &= ocean & (consistency >= min_consistency)
+        la, lo = np.meshgrid(ds.lat.values, ds.lon.values, indexing="ij")
+        norm = np.hypot(u, v)[keep]
+        return lo[keep], la[keep], u[keep] / norm, v[keep] / norm
 
     def basin_pct(self, name):
         b = self.basins[name]
@@ -108,7 +136,9 @@ class Month:
         rows = []
         for name, region, lat, lon, facing in SPOTS:
             basin = next((k for k, g in geoms.items() if g.distance(Point(lon, lat)) < 1.0), None)
-            if basin and basin in self.basins:
+            if basin:
+                if basin not in self.basins:  # this month's Open-Meteo data not downloaded yet
+                    continue
                 b = self.basins[basin]
                 k = _seaward(b["lat"], b["lon"], lat, lon, facing)
                 if k is None:

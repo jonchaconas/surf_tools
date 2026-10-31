@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
-MONTHS = (11, 12)
+MONTHS = (11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)  # page order: the year ahead from November
 N_SEASONS = 5  # Open-Meteo only has swell partitions from Oct 2021, which caps the record
 
 

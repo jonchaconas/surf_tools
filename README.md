@@ -1,9 +1,11 @@
 # surf-forecast-tools
 
 Maps of how often the surf is good around the world, built from wave-model history.
-`surf_good_days.pdf` has one page per month. Each page has:
+`surf_good_days.pdf` has one page per month, November through October. Each page has:
 
-- a world map with filled contours of the share of mornings that were good-or-better (good+)
+- a world map with filled contours of the share of mornings that were good-or-better
+  (good+), from red (rarely) to green (usually), plus arrows showing the predominant
+  swell direction
 - insets for the Great Lakes, the Mediterranean and Black Sea, and the Caspian
 - a ranked table of named breaks
 
@@ -19,6 +21,10 @@ good+ when the swell:
 The thresholds live in [`surfmap/config.py`](surfmap/config.py). For the break table,
 the swell must also arrive within 75° of the direction the break faces.
 
+Each arrow is the average of a cell's morning swell directions, weighted by wave power
+(height² × period). Cells with no clear predominant direction get no arrow: that is,
+where the weighted mean vector is under 30% of the total weight.
+
 ## Data
 
 | Area | Source | Sampling |
@@ -27,8 +33,9 @@ the swell must also arrive within 75° of the direction the break faces.
 | Great Lakes, Mediterranean, Black Sea, Caspian | [Open-Meteo Marine API](https://open-meteo.com/en/docs/marine-weather-api) (Météo-France MFWAM) | 0.75° on the lakes, 1.5–2° on the seas |
 
 Open-Meteo's swell fields start in October 2021, so each month uses its five most
-recent complete seasons. WW3 is missing 1–15 November 2025; those days are dropped
-from both sources. Open-Meteo has no swell peak period on the Great Lakes, so there
+recent complete seasons: 2021–2025 for October to December, 2022–2026 for January to
+September. WW3 has a few outages, including 1–15 November 2025, 1 day of July 2022 and
+7 days of October 2025. Days missing from WW3 are dropped from both sources. Open-Meteo has no swell peak period on the Great Lakes, so there
 it is estimated from the mean swell period, using the median peak/mean ratio from the
 other seas.
 
@@ -41,9 +48,13 @@ uv run python -m surfmap fetch    # downloads into data/ (cached, resumable)
 uv run python -m surfmap build    # writes surf_good_days.pdf
 ```
 
-The WW3 download is about 280 MB for two months. Open-Meteo's free tier limits weighted
-calls to 5,000 per hour and 10,000 per day. The inland fetch throttles itself and can be
-re-run safely: it skips files it has already downloaded.
+The WW3 download is about 1.7 GB for all twelve months.
+
+The enclosed seas need about 20,000 Open-Meteo weighted calls. The free tier allows 5,000
+per hour and 10,000 per day, so this fetch takes about two days. It fills one month at a
+time, waits out throttling, and can be re-run safely: it skips files it has already
+downloaded. A month whose enclosed-sea data is incomplete still renders, but its insets
+say the data is still downloading.
 
 ## Limitations
 

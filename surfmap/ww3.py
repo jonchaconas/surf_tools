@@ -97,7 +97,7 @@ def _url(lon0, t0, t1):
     return f"{ERDDAP}.nc?" + ",".join(_quote(v + sel) for v in VARS)
 
 
-def fetch(workers=3):
+def fetch(workers=4):
     jobs = [j for j in _jobs() if not _path(j[0], j[1], j[2], j[4]).exists()]
     print(f"WW3: {len(jobs)} files to download", flush=True)
 
