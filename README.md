@@ -43,15 +43,15 @@ Breakout tables are listed by year-round consistency.
 - **Map:** zoom and pan the world map, and switch between year-round, the half years or any
   single month. The contours are drawn from a smooth 0.25° field that runs right up to the
   coastline.
-- **Coast that faces the right way:** within about 80 km of land, each 0.25° pixel counts swell
-  only from the compass directions that reach open water from it: 200 km of it, or 100 km in
-  lakes and enclosed seas. Bays, headlands and offshore islands therefore shelter the coast
-  behind them. For example, the Channel Islands shadow much of Southern California, and
-  Chesapeake Bay and Puget Sound come out flat.
+- **Coast that faces the right way:** within about 80 km of land, each 0.25° pixel weights every
+  morning by how open it is to that morning's swell direction. Openness is the share of sight
+  lines from that direction that run 200 km over water (100 km in lakes and enclosed seas).
+  Mainland and large islands block what they face. Islands under 1,000 km², such as the Channel
+  Islands, only half-block, since swell wraps around them and through the gaps between them.
 - **Click anywhere:** a click shows a month-by-month chart for whatever it lands on:
   - a named break, an under-the-radar stretch or a regional coast, with its typical good
     morning, tide range and morning wind;
-  - any stretch of coast, with a compass rose of the directions it is open to;
+  - any stretch of coast, with a compass rose showing how open it is to each direction;
   - any patch of ocean.
 
   A click inland snaps to the nearest coast.

@@ -206,11 +206,15 @@ def _land():
 RASTER = analysis.RES   # 0.25 degrees: the page's smoothed field and coastal band live on this grid
 COAST_DEG = 0.75        # water this close to land is "coast" and judged by its own exposure
 RAY_KM, BASIN_RAY_KM, LAND_RES = 200, 100, 0.05   # open water a sector needs; enclosed seas build waves over shorter fetch
+RAYS = 9               # sight lines across each 22.5 degree sector
+ISLAND_KM2 = 1000      # land smaller than this only half-blocks a ray: swell wraps around it
 
 
 def _land_raster():
-    """Land at LAND_RES degrees (Great Lakes and Caspian as water), for casting exposure rays."""
+    """Land at LAND_RES degrees for casting exposure rays (Great Lakes and Caspian as water):
+    0 water, 1 an island under ISLAND_KM2, 2 larger land."""
     from PIL import Image, ImageDraw
+    from scipy.ndimage import label
 
     from .plot import _land as land_feature
 
@@ -223,29 +227,34 @@ def _land_raster():
         draw.polygon(to_px(poly.exterior), fill=1)
         for hole in poly.interiors:
             draw.polygon(to_px(hole), fill=0)
-    return np.array(img, dtype=bool)
+    land = np.array(img, dtype=bool)
+    parts, _ = label(land, structure=np.ones((3, 3)))
+    px_km2 = (LAND_RES * 111.2) ** 2 * np.cos(np.radians(90 - (np.arange(h) + 0.5) * LAND_RES))
+    area = np.bincount(parts.ravel(), weights=np.repeat(px_km2.astype(np.float32), w))
+    area[0] = np.inf
+    return np.where(land, np.where(area[parts] < ISLAND_KM2, 1, 2), 0).astype(np.uint8)
 
 
 def _open_sectors(lat, lon, land, ray_km):
-    """16-bit masks: bit k set when swell from sector k (k * 22.5 degrees, 0 = N) can reach the point,
-    i.e. at least two of three rays across that sector run ray_km (per point) over water. Bays,
-    headlands and offshore islands close the sectors they block."""
+    """How open each point is to swell from each compass sector (k * 22.5 degrees, 0 = N), 0-255:
+    the mean over RAYS sight lines across the sector, each 1 when it runs ray_km (per point) over
+    water, 0 when larger land is in the way and 0.5 when only small islands are, since swell wraps
+    around those. Bays and headlands close what they block; island chains leave windows."""
     steps = np.arange(5, RAY_KM + 1, 5)
     within = steps[None, :] <= np.asarray(ray_km)[:, None]
     h, w = land.shape
-    mask = np.zeros(len(lat), np.uint16)
+    out = np.zeros((len(lat), 16), np.float32)
     coslat = np.cos(np.radians(lat))[:, None]
     for k in range(16):
-        clear = np.zeros(len(lat), np.int32)
-        for off in (-7.5, 0.0, 7.5):
+        for off in (np.arange(RAYS) + 0.5) / RAYS * 22.5 - 11.25:
             th = np.radians(k * 22.5 + off)
             la = lat[:, None] + steps[None, :] * np.cos(th) / 111.2
             lo = lon[:, None] + steps[None, :] * np.sin(th) / (111.2 * np.maximum(coslat, 0.05))
             r = np.clip(((90 - la) / LAND_RES).astype(int), 0, h - 1)
             c = ((lo + 180) / LAND_RES).astype(int) % w
-            clear += ~(land[r, c] & within).any(axis=1)
-        mask |= ((clear >= 2) << k).astype(np.uint16)
-    return mask
+            worst = (land[r, c] * within).max(axis=1)
+            out[:, k] += np.where(worst == 2, 0.0, np.where(worst == 1, 0.5, 1.0))
+    return np.round(out / RAYS * 255).astype(np.uint8)
 
 
 def _raster(cells, res, dhists):
@@ -321,7 +330,7 @@ def _raster(cells, res, dhists):
         src[n] = options[0][0]
         for cell, olat, olon in options:  # prefer a source out through an open sector
             sector = int(((_bearing(clat[n], clon[n], olat, olon) + 11.25) % 360) // 22.5)
-            if masks[n] >> sector & 1:
+            if masks[n, sector] >= 128:
                 src[n] = cell
                 break
     band = COAST_DEG / RASTER
@@ -345,7 +354,7 @@ def _raster(cells, res, dhists):
 
     coast_bin = (ci.astype(np.uint32).tobytes() + fringe.astype(np.uint32).tobytes()
                  + fringe_to.astype(np.uint32).tobytes()
-                 + np.array([sidx[c] for c in src], np.uint16).tobytes() + masks.astype(np.uint16).tobytes()
+                 + np.array([sidx[c] for c in src], np.uint16).tobytes() + masks.tobytes()
                  + np.round(alpha * 255).astype(np.uint8).tobytes())
     print(f"  coastal band: {len(ci)} pixels, {len(fringe)} shore strip, {len(sources)} source cells", flush=True)
     return dict(

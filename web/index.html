@@ -148,7 +148,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
             <option value="3">±75°</option><option value="4">±90°</option><option value="5">Any direction</option>
           </select>
         </label>
-        <p class="note">Along the coast, the map counts only swell from directions that reach open water: at least 200 km of it (100 km in lakes and enclosed seas) before hitting land, so bays, headlands and islands shelter the coast behind them. The angle setting applies to the marked breaks.</p>
+        <p class="note">Along the coast, each morning counts by how open the shore is to that morning's swell direction: the share of sight lines from that direction with 200 km of open water (100 km in lakes and enclosed seas). Bays and headlands block what they face; islands under 1,000 km² only half-block, since swell wraps around them. The angle setting applies to the marked breaks.</p>
         <p class="note">Each day is judged on one model snapshot near 08:00 local time. Heights are the swell's significant height in feet; in the Great Lakes, Mediterranean, Black Sea and Caspian (and their regional coasts) total waves are used instead, and the chop setting doesn't apply there.</p>
       </section>
 
@@ -287,10 +287,11 @@ function recompute() {
 
 // ---------- the field: a smooth surface on a 0.25° raster that follows the coast ----------
 // Open ocean interpolates the model grid and enclosed seas blend their own points. The coastal
-// band (water within ~80 km of land) reads its nearest seaward model cell but counts only swell
-// from the compass sectors that reach open water from that pixel, so bays, headlands and islands
-// shelter what they block. A strip of land along the shore copies the nearest coastal pixel, so
-// the contours run right up to the coastline. See surfmap/export.py (_raster).
+// band (water within ~80 km of land) reads its nearest seaward model cell and weights each morning
+// by how open the pixel is to swell from that morning's direction (0-255 per compass sector), so
+// bays and headlands shelter what they block and island chains shade it in part. A strip of land
+// along the shore copies the nearest coastal pixel, so the contours run right up to the coastline.
+// See surfmap/export.py (_raster, _open_sectors).
 let F, ocean, fieldVersion = 0;
 let band = [-78.5, 79.5];  // latitudes the map shows: the rows with data (set from the raster)
 const merc = lat => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
@@ -298,7 +299,7 @@ function setupRaster(r, cat, cbuf) {
   const n = r.coast.n, f = r.coast.fringe, N = r.nlat * r.nlon;
   R = { res: r.res, nlat: r.nlat, nlon: r.nlon, cat, basin: r.basin, sources: r.coast.sources,
     pix: new Uint32Array(cbuf, 0, n), fringe: new Uint32Array(cbuf, 4 * n, f), fringeTo: new Uint32Array(cbuf, 4 * n + 4 * f, f),
-    src: new Uint16Array(cbuf, 4 * n + 8 * f, n), mask: new Uint16Array(cbuf, 6 * n + 8 * f, n), alpha: new Uint8Array(cbuf, 8 * n + 8 * f, n),
+    src: new Uint16Array(cbuf, 4 * n + 8 * f, n), open: new Uint8Array(cbuf, 6 * n + 8 * f, 16 * n), alpha: new Uint8Array(cbuf, 22 * n + 8 * f, n),
     coastAt: new Int32Array(N).fill(-1), basinAt: new Map() };
   R.pix.forEach((p, k) => { R.coastAt[p] = k; });
   R.fringe.forEach((p, k) => { R.coastAt[p] = R.fringeTo[k]; });
@@ -378,7 +379,7 @@ function computeField() {
     for (let q = 4 * k; q < 4 * k + 4; q++) { const v = cellPct[nb[q]]; if (v === v && w[q] > 0) { s += v * w[q]; t += w[q]; } }
     F[pix[k]] = t ? s / t : NaN;
   }
-  // Coastal band: good mornings per source cell and compass sector, then each pixel sums its open sectors.
+  // Coastal band: good mornings per source cell and compass sector, then each pixel weights them by how open it is.
   const S = R.sources.length, good = new Float64Array(S * 16), days = new Float64Array(S);
   for (let s = 0; s < S; s++) for (const m of period.months) {
     const i = s * 12 + m - 1;
@@ -389,10 +390,10 @@ function computeField() {
     }
   }
   for (let c = 0; c < R.pix.length; c++) {  // fading into the open-water value toward the band's outer edge
-    const s = R.src[c], open = R.mask[c], p = R.pix[c], a = R.alpha[c] / 255, under = F[p];
+    const s = R.src[c], p = R.pix[c], a = R.alpha[c] / 255, under = F[p];
     let n = 0;
-    for (let k = 0; k < 16; k++) if (open >> k & 1) n += good[s * 16 + k];
-    const v = days[s] ? (100 * n) / days[s] : NaN;
+    for (let k = 0; k < 16; k++) n += good[s * 16 + k] * R.open[c * 16 + k];
+    const v = days[s] ? (100 * n) / 255 / days[s] : NaN;
     F[p] = v !== v ? under : under !== under ? v : a * v + (1 - a) * under;
   }
   for (let k = 0; k < R.fringe.length; k++) F[R.fringe[k]] = F[R.pix[R.fringeTo[k]]];
@@ -597,26 +598,32 @@ function blend(weights, f) {
   for (const [c, w] of weights) { const v = f(c); if (isFinite(v)) { s += v * w; t += w; } }
   return t ? s / t : NaN;
 }
-function arcs(mask) {  // open compass sectors as runs, e.g. "SSE–NW"
-  if (mask === 0xffff) return "every direction";
-  if (!mask) return "no direction (sheltered on every side)";
-  const on = k => (mask >> (((k % 16) + 16) % 16)) & 1;
+function runs(test) {  // compass sectors passing test, as runs such as "SSE–NW"
+  const on = k => test(((k % 16) + 16) % 16);
+  if (P16.every((_, k) => on(k))) return ["every direction"];
   let start = 0; while (on(start)) start++;
-  const runs = [];
+  const out = [];
   for (let n = 1; n <= 16; n++) {
     const s = (start + n) % 16;
     if (!on(s)) continue;
-    if (!on(s - 1)) runs.push([s, s]); else runs[runs.length - 1][1] = s;
+    if (!on(s - 1)) out.push([s, s]); else out[out.length - 1][1] = s;
   }
-  return runs.map(([a, b]) => a === b ? P16[a] : `${P16[a]}–${P16[b]}`).join(", ");
+  return out.map(([a, b]) => a === b ? P16[a] : `${P16[a]}–${P16[b]}`);
 }
-function rose(mask) {  // open sectors in the accent colour, closed ones grey
+function exposure(open) {  // e.g. "SSE–SW, W; partly WNW"
+  const full = runs(k => open[k] >= 192), part = runs(k => open[k] >= 64 && open[k] < 192);
+  if (!full.length && !part.length) return "no direction (sheltered on every side)";
+  return [full.join(", "), part.length ? `partly ${part.join(", ")}` : ""].filter(Boolean).join("; ");
+}
+function rose(open) {  // each sector shaded by how open it is
   const c = 34, r = 26, at = (deg, rad) => [c + rad * Math.sin(deg * Math.PI / 180), c - rad * Math.cos(deg * Math.PI / 180)];
   const wedges = P16.map((_, k) => {
     const [x0, y0] = at(k * 22.5 - 11.25, r), [x1, y1] = at(k * 22.5 + 11.25, r);
-    return `<path d="M${c},${c}L${x0.toFixed(1)},${y0.toFixed(1)}A${r},${r} 0 0 1 ${x1.toFixed(1)},${y1.toFixed(1)}Z" fill="${(mask >> k) & 1 ? "var(--accent)" : "var(--rule)"}" stroke="var(--panel)" stroke-width="1"></path>`;
+    const d = `M${c},${c}L${x0.toFixed(1)},${y0.toFixed(1)}A${r},${r} 0 0 1 ${x1.toFixed(1)},${y1.toFixed(1)}Z`;
+    return `<path d="${d}" fill="var(--rule)" stroke="var(--panel)" stroke-width="1"></path>` +
+      (open[k] ? `<path d="${d}" fill="var(--accent)" fill-opacity="${(open[k] / 255).toFixed(2)}" stroke="var(--panel)" stroke-width="1"></path>` : "");
   }).join("");
-  return `<svg class="rose" viewBox="0 0 68 68" width="68" height="68" role="img" aria-label="Open to swell from ${arcs(mask)}">${wedges}<circle cx="${c}" cy="${c}" r="5" fill="var(--panel)"></circle>` +
+  return `<svg class="rose" viewBox="0 0 68 68" width="68" height="68" role="img" aria-label="Open to swell from ${exposure(open)}">${wedges}<circle cx="${c}" cy="${c}" r="5" fill="var(--panel)"></circle>` +
     ["N", "E", "S", "W"].map((t, q) => { const [x, y] = at(q * 90, r + 6); return `<text x="${x.toFixed(1)}" y="${(y + 3).toFixed(1)}" text-anchor="middle">${t}</text>`; }).join("") + `</svg>`;
 }
 
@@ -657,6 +664,19 @@ function nearestPoint(lat, lon, within) {
   meta.points.forEach(p => { const d = km({ lat, lon }, p); if (d < bd) { bd = d; best = p; } });
   return best && { p: best, km: bd };
 }
+function coastShare(c, months) {  // good mornings at a coastal pixel, each weighted by how open it is to that swell
+  const s = R.src[c];
+  let good = 0, days = 0;
+  for (const m of months) {
+    const i = s * 12 + m - 1;
+    days += coastBins.days[i];
+    for (let k = coastBins.start[i]; k < coastBins.start[i + 1]; k++) {
+      const code = coastBins.codes[k];
+      if (lut.g[code >> 4]) good += coastBins.counts[k] * R.open[c * 16 + (code & 15)];
+    }
+  }
+  return days ? (100 * good) / 255 / days : NaN;
+}
 function select(sel) { selected = sel; draw(); renderDetail(); }
 const EMPTY = `<h2>Selected</h2><p class="detail-empty">Click a break, any stretch of coast or any patch of ocean to see its month-by-month chart.</p>`;
 function renderDetail() {
@@ -677,18 +697,18 @@ function renderDetail() {
     typ = typical(pts, i, period.months, code => lut.p[code], code => Math.floor(code / 6));
     facts = `<dt>Faces</dt><dd>${p.facing}°</dd><dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${windText(p)}</dd><dt>Measured on</dt><dd>${p.measure === "waves" ? "total waves" : "swell"}</dd>`;
   } else if (selected.type === "coast") {
-    const c = selected.c, s = R.src[c], cell = R.sources[s], open = R.mask[c];
-    const pass = code => ((open >> (code & 15)) & 1) && lut.g[code >> 4];
+    const c = selected.c, s = R.src[c], cell = R.sources[s], open = R.open.subarray(c * 16, c * 16 + 16);
+    const pass = code => open[code & 15] >= 128 && lut.g[code >> 4];
     const la = meta.cells.lat[cell], lo = meta.cells.lon[cell], near = nearestPoint(selected.lat, selected.lon, 60);
     title = near ? `Coast near ${near.p.name}` : latlon(selected.lat, selected.lon, 2);
     sub = `${near ? latlon(selected.lat, selected.lon, 2) + " · " : ""}${selected.snapped ? "nearest coast to where you clicked" : "this stretch of shore"}`;
     badge = "Coastline";
     const a = R.alpha[c] / 255, mix = (v, w) => !isFinite(w) ? v : !isFinite(v) ? w : a * v + (1 - a) * w;  // as on the map
-    pct = mix(shareIf(coastBins, s, period.months, pass), blend(selected.under, x => cellPct[x]));
-    shares = MONTHS.map((_, m) => mix(shareIf(coastBins, s, [m + 1], pass), blend(selected.under, x => share(grid, lut.g, x, [m + 1]))));
+    pct = mix(coastShare(c, period.months), blend(selected.under, x => cellPct[x]));
+    shares = MONTHS.map((_, m) => mix(coastShare(c, [m + 1]), blend(selected.under, x => share(grid, lut.g, x, [m + 1]))));
     typ = typical(coastBins, s, period.months, pass, code => code >> 4, code => code & 15);
     side = rose(open);
-    facts = `<dt>Swell reaches it from</dt><dd>${arcs(open)}</dd>` +
+    facts = `<dt>Swell reaches it from</dt><dd>${exposure(open)}</dd>` +
       `<dt>Waves read at</dt><dd>${meta.cells.enclosed[cell] ? "model point" : meta.res + "° model cell"} ${latlon(la, lo)}, ${Math.round(km({ lat: selected.lat, lon: selected.lon }, { lat: la, lon: lo }))} km away</dd>` +
       `<dt>Measured on</dt><dd>${meta.cells.enclosed[cell] ? "total waves" : "swell"}</dd>`;
   } else {
