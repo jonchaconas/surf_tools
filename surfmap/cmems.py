@@ -10,6 +10,7 @@ period, as for the Great Lakes. Needs a Copernicus Marine login (`copernicusmari
 
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
@@ -110,9 +111,18 @@ def fill(workers=4, basins=None):
     OUT.mkdir(parents=True, exist_ok=True)
     print(f"Copernicus: {len(jobs)} files missing, {len(points)} points to fetch", flush=True)
     early = sorted({p for _, pts, d0, _ in jobs if d0 < SPAN[0].date() for p in pts})
+    def safe(point, early=False):  # a timeout shouldn't sink the run; re-running picks up what failed
+        for attempt in range(3):
+            try:
+                return _fetch_point(point, early)
+            except Exception as e:
+                print(f"  {point} {'early ' if early else ''}attempt {attempt + 1} failed: {e}", flush=True)
+                time.sleep(30 * (attempt + 1))
+
     with ThreadPoolExecutor(workers) as ex:
-        list(ex.map(_fetch_point, points))
-        list(ex.map(lambda p: _fetch_point(p, early=True), early))
+        list(ex.map(safe, points))
+        list(ex.map(lambda p: safe(p, early=True), early))
+    jobs = [j for j in jobs if all(_cache(*p).exists() and (j[2] >= SPAN[0].date() or _cache(*p, True).exists()) for p in j[1])]
     for path, pts, d0, d1 in jobs:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(_rows(pts, d0, d1)))

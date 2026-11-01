@@ -71,6 +71,20 @@ select { font: 14px var(--body); color: var(--ink); background: var(--panel); bo
 .range2 input::-moz-range-thumb { pointer-events: auto; width: 14px; height: 14px; border-radius: 50%; background: var(--accent);
   border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent); cursor: grab; }
 .range2 input:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+.search { position: relative; flex: 1 1 220px; max-width: 320px; }
+.search input { width: 100%; font: 14px var(--body); color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 6px 8px; }
+#qres { position: absolute; z-index: 20; left: 0; right: 0; top: 34px; margin: 0; padding: 4px; list-style: none; background: var(--panel);
+  border: 1px solid var(--rule); border-radius: 6px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); max-height: 60vh; overflow: auto; }
+#qres button { width: 100%; text-align: left; display: grid; gap: 1px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font: 14px var(--body); cursor: pointer; }
+#qres button span { font-size: 12px; color: var(--muted); }
+#qres button:hover, #qres button[aria-selected="true"] { background: var(--water); }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.mini { font: 600 12px var(--body); border: 1px solid var(--rule); background: transparent; color: var(--ink); border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+.mini[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.cmpgrid { display: grid; gap: 12px; }
+.cmphead { display: flex; align-items: baseline; gap: 8px; }
+.cmphead strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmphead .x { border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; }
 /* Section notes live behind an (i) by the heading: hover, or tap, to read. */
 section.block { position: relative; }
 .info { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 6px; padding: 0; vertical-align: 2px;
@@ -124,6 +138,11 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
 <div class="app">
   <header>
     <h1>Predictive Surf Atlas<small id="subtitle">how often the surf is good, from years of wave-model mornings</small></h1>
+    <div class="search">
+      <input id="q" type="search" placeholder="Search spots or towns" autocomplete="off" aria-label="Search spots or towns" aria-controls="qres">
+      <ul id="qres" role="listbox" hidden></ul>
+    </div>
+    <button class="chip" id="copylink" title="Copy a link to exactly this view">Copy link</button>
     <div class="periods" role="group" aria-label="Period" id="periods"></div>
   </header>
   <main>
@@ -140,6 +159,11 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
       <div class="loading" id="loading">Loading the model data…</div>
     </div>
     <aside>
+      <section class="block" id="cmpsec" hidden>
+        <h2>Compare</h2>
+        <div id="cmp" class="cmpgrid"></div>
+      </section>
+
       <section class="block detail" id="detail" aria-live="polite">
         <h2>Selected</h2>
         <p class="detail-empty">Click a break, any stretch of coast or any patch of ocean to see its month-by-month chart.</p>
@@ -174,6 +198,12 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
         <p class="note">At the marked breaks, either swell train can make a morning good, and the wind setting uses ERA5 morning wind just offshore; wind from the land (within 45° of straight offshore) always counts as clean. Out at sea and in the coloured coastal band, the chop setting judges the wave model's wind sea instead.</p>
         <p class="note">Along the coast, each morning counts by how open the shore is to that morning's swell direction: the share of sight lines from that direction with 200 km of open water (100 km in lakes and enclosed seas). Bays and headlands block what they face; islands under 1,000 km² only half-block, since swell wraps around them.</p>
         <p class="note">Each day is judged on one model snapshot near 08:00 local time. Heights are the swell's significant height in feet; in the Great Lakes, Mediterranean, Black Sea and Caspian (and their regional coasts) total waves are used instead, and neither wind nor chop applies there.</p>
+      </section>
+
+      <section class="block" id="minesec" hidden>
+        <h2>My spots</h2>
+        <ol class="top" id="mine"></ol>
+        <p class="note">Spots you've saved with ☆ Save, kept in this browser.</p>
       </section>
 
       <section class="block">
@@ -375,6 +405,7 @@ async function applyYears() {
   document.getElementById("hintperiod").textContent = period.label + yearsLabel();
   recompute();
 }
+let setYears = () => {};
 function setupYears() {
   const ys = meta.years, from = document.getElementById("yfrom"), to = document.getElementById("yto");
   yr = { from: ys[0], to: ys.at(-1) };
@@ -389,6 +420,10 @@ function setupYears() {
     from.style.zIndex = yr.from === ys.at(-1) ? 3 : 1;  // both handles at the end: keep the lower one reachable
   };
   show();
+  setYears = (a, b) => {
+    yr.from = Math.max(ys[0], Math.min(a, b)); yr.to = Math.min(ys.at(-1), Math.max(a, b));
+    from.value = yr.from; to.value = yr.to; show();
+  };
   let wait;
   const changed = which => {
     yr.from = +from.value; yr.to = +to.value;
@@ -427,7 +462,7 @@ function recompute() {
   for (let e = 0; e < grid.n; e++) cellPct[e] = share(grid, lut.g, e, period.months);
   pointPct = new Float32Array(pts.n);
   for (let e = 0; e < pts.n; e++) pointPct[e] = pointShare(e, period.months);
-  computeField(); findUncharted(); draw(); renderTop(); renderDetail();
+  computeField(); findUncharted(); draw(); renderTop(); renderDetail(); renderMine(); renderCompare(); saveState();
 }
 
 // ---------- uncharted coast: rates well by the current criteria, far from every charted spot ----------
@@ -571,7 +606,7 @@ function computeField() {
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
 const field = document.createElement("canvas"), fctx = field.getContext("2d");
-let W = 0, H = 0, projection, path, bandRect, pointXY = [], polarXY = [], fieldImg = null, fieldKey = "", PAL, NODATA, moving = false, settle;
+let W = 0, H = 0, worldW = 1, projection, path, bandRect, pointXY = [], polarXY = [], fieldImg = null, fieldKey = "", PAL, NODATA, moving = false, settle;
 // Mercator, inverted by hand: d3's invert wraps longitudes, and the field is drawn per screen pixel.
 const lonAt = x => (x - projection.translate()[0]) / projection.scale() * 180 / Math.PI;
 const latAt = y => (2 * Math.atan(Math.exp((projection.translate()[1] - y) / projection.scale())) - Math.PI / 2) * 180 / Math.PI;
@@ -590,6 +625,7 @@ function layout() {
   if (projection([0, band[0]])[1] > H) projection.fitHeight(H, { type: "MultiPoint", coordinates: [[-180, band[0]], [180, band[1]]] });
   const tx = projection.translate()[0], s = projection.scale();
   bandRect = [[tx - Math.PI * s, projection([0, band[1]])[1]], [tx + Math.PI * s, projection([0, band[0]])[1]]];
+  worldW = 2 * Math.PI * s;
   path = d3.geoPath(projection, ctx);
   zoom.extent([[0, 0], [W, H]]).translateExtent(bandRect);
   if (!R) return;
@@ -599,13 +635,38 @@ function layout() {
   fieldKey = "";
   draw();
 }
+const hiTiles = new Map();  // "lat_lon" -> { ready, fill, coast } from data/land10/
+function viewTiles(o) {  // the detailed-coastline tiles covering the view, for the world copy at offset o; fetches missing ones
+  const t = meta.tile, k = transform.k, vx0 = -transform.x / k - o, vx1 = (W - transform.x) / k - o;
+  const lon0 = Math.max(-180, lonAt(vx0)), lon1 = Math.min(179.99, lonAt(vx1)), lat0 = latAt((H - transform.y) / k), lat1 = latAt(-transform.y / k);
+  const have = meta.tileSet || (meta.tileSet = new Set(meta.tiles)), out = [];
+  for (let la = Math.floor(lat0 / t) * t; la < lat1; la += t) for (let lo = Math.floor(lon0 / t) * t; lo < lon1; lo += t) {
+    const key = `${la}_${lo}`;
+    if (!have.has(key)) continue;
+    out.push(key);
+    if (!hiTiles.has(key)) {
+      hiTiles.set(key, { ready: false });
+      json(`data/land10/${key}.json`).then(g => { hiTiles.set(key, { ready: true, ...g }); draw(); }).catch(() => hiTiles.delete(key));
+    }
+  }
+  return out;
+}
 function splitLand(l) {
   // Antarctica wraps the pole, which Mercator sends to infinity (d3 then fills the oceans instead),
   // so its outline is drawn flat, cut off at 85°S.
   const polys = l.geometry.type === "MultiPolygon" ? l.geometry.coordinates : [l.geometry.coordinates];
   const polar = p => p[0].some(q => q[1] < -89);
+  // Outlines follow real coast only: rings are broken where the data is cut at 180° or near the pole.
+  const cut = ([x, y]) => Math.abs(x) >= 179.999 || y <= -84.9;
+  const lines = [];
+  for (const poly of polys) for (const ring of poly) {
+    let run = [];
+    for (const q of ring) { if (cut(q)) { if (run.length > 1) lines.push(run); run = []; } else run.push(q); }
+    if (run.length > 1) lines.push(run);
+  }
   return { rest: { type: "MultiPolygon", coordinates: polys.filter(p => !polar(p)) },
-    polar: polys.filter(polar).map(p => p[0].map(([x, y]) => [x, Math.max(y, -85)])) };
+    polar: polys.filter(polar).map(p => p[0].map(([x, y]) => [x, Math.max(y, -85)])),
+    lines: { type: "MultiLineString", coordinates: lines } };
 }
 function renderField(scale) {  // bilinear samples of the raster at every output pixel, coloured by band
   const w = Math.max(1, Math.round(W * scale)), h = Math.max(1, Math.round(H * scale));
@@ -614,7 +675,7 @@ function renderField(scale) {  // bilinear samples of the raster at every output
   const cj = new Int32Array(w), cf = new Float32Array(w), ri = new Int32Array(h), rf = new Float32Array(h);
   for (let c = 0; c < w; c++) {
     const lon = lonAt(((c + 0.5) / scale - transform.x) / k), fj = (lon + 180) / res - 0.5, j0 = Math.floor(fj);
-    cj[c] = lon < -180 || lon > 180 ? -1 : ((j0 % nlon) + nlon) % nlon; cf[c] = fj - j0;
+    cj[c] = ((j0 % nlon) + nlon) % nlon; cf[c] = fj - j0;  // the map wraps round the date line
   }
   for (let r = 0; r < h; r++) {
     const fi = (latAt(((r + 0.5) / scale - transform.y) / k) + 90) / res - 0.5, i0 = Math.floor(fi);
@@ -646,84 +707,94 @@ function draw() {
   ctx.fillStyle = css("--paper"); ctx.fillRect(0, 0, canvas.width, canvas.height);
   const [[x0, y0], [x1, y1]] = bandRect;
   ctx.save(); ctx.beginPath();
-  ctx.rect(dpr * (transform.x + k * x0), dpr * (transform.y + k * y0), dpr * k * (x1 - x0), dpr * k * (y1 - y0)); ctx.clip();
+  ctx.rect(0, dpr * (transform.y + k * y0), canvas.width, dpr * k * (y1 - y0)); ctx.clip();
   ctx.fillStyle = css("--water"); ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (fieldVersion) {
     const scale = moving ? 1 : dpr, key = [transform.x, transform.y, k, W, H, scale, fieldVersion, NODATA].join();
     if (key !== fieldKey) { renderField(scale); fieldKey = key; }
     ctx.drawImage(field, 0, 0, canvas.width, canvas.height);
   }
-  ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * transform.x, dpr * transform.y);
-  if (land) {
-    ctx.beginPath(); path(land.rest);
-    for (const ring of polarXY) { ctx.moveTo(ring[0][0], ring[0][1]); for (const [x, y] of ring) ctx.lineTo(x, y); ctx.closePath(); }
-    ctx.fillStyle = css("--land"); ctx.fill();
-    ctx.strokeStyle = css("--coast"); ctx.lineWidth = 0.6 / k; ctx.stroke();
-  }
-  if ((osm.length || gaps.length) && k >= 2.5) {  // OpenStreetMap spots and coast points, once there's room, coloured by their beach
-    ctx.strokeStyle = css("--ink"); ctx.lineWidth = 0.6 / k;
-    for (const o of osm) {
-      if (!o.xy || !shown(osmPct(o))) continue;
-      ctx.beginPath(); ctx.arc(o.xy[0], o.xy[1], 2.4 / k, 0, 2 * Math.PI); ctx.fillStyle = colorFor(osmPct(o)) || css("--ink"); ctx.fill(); ctx.stroke();
+  const vx0 = -transform.x / k, vx1 = (W - transform.x) / k;  // the view in base units
+  for (const o of [-worldW, 0, worldW]) {  // each copy of the world that shows
+    if (x0 + o > vx1 || x1 + o < vx0) continue;
+    ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * (transform.x + k * o), dpr * transform.y);
+    const tiles = land && k >= 6 && meta.tiles ? viewTiles(o) : null;  // detailed coastline once zoomed in and loaded
+    if (tiles && tiles.every(t => hiTiles.get(t)?.ready)) {
+      ctx.beginPath(); for (const t of tiles) if (hiTiles.get(t).fill) path(hiTiles.get(t).fill);
+      ctx.fillStyle = css("--land"); ctx.fill();
+      ctx.beginPath(); for (const t of tiles) if (hiTiles.get(t).coast) path(hiTiles.get(t).coast);
+      ctx.strokeStyle = css("--coast"); ctx.lineWidth = 0.6 / k; ctx.stroke();
+    } else if (land) {
+      ctx.beginPath(); path(land.rest);
+      for (const ring of polarXY) { ctx.moveTo(ring[0][0], ring[0][1]); for (const [x, y] of ring) ctx.lineTo(x, y); ctx.closePath(); }
+      ctx.fillStyle = css("--land"); ctx.fill();
+      ctx.beginPath(); path(land.lines); ctx.strokeStyle = css("--coast"); ctx.lineWidth = 0.6 / k; ctx.stroke();
     }
-    for (const g of gaps) {  // coast points, one every ~200 km where nothing else is mapped
-      if (!g.xy || !shown(osmPct(g))) continue;
-      const r = 2.6 / k;
-      ctx.beginPath(); ctx.rect(g.xy[0] - r, g.xy[1] - r, 2 * r, 2 * r); ctx.fillStyle = colorFor(osmPct(g)) || css("--ink"); ctx.fill(); ctx.stroke();
+    if ((osm.length || gaps.length) && k >= 2.5) {  // OpenStreetMap spots and coast points, once there's room, coloured by their beach
+      ctx.strokeStyle = css("--ink"); ctx.lineWidth = 0.6 / k;
+      for (const o of osm) {
+        if (!o.xy || !shown(osmPct(o))) continue;
+        ctx.beginPath(); ctx.arc(o.xy[0], o.xy[1], 2.4 / k, 0, 2 * Math.PI); ctx.fillStyle = colorFor(osmPct(o)) || css("--ink"); ctx.fill(); ctx.stroke();
+      }
+      for (const g of gaps) {  // coast points, one every ~200 km where nothing else is mapped
+        if (!g.xy || !shown(osmPct(g))) continue;
+        const r = 2.6 / k;
+        ctx.beginPath(); ctx.rect(g.xy[0] - r, g.xy[1] - r, 2 * r, 2 * r); ctx.fillStyle = colorFor(osmPct(g)) || css("--ink"); ctx.fill(); ctx.stroke();
+      }
+      if (k >= 12) {
+        ctx.font = `400 ${10 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = css("--muted");
+        ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
+        for (const o of [...osm, ...gaps]) { if (!o.xy || !shown(osmPct(o))) continue; ctx.strokeText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); ctx.fillText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); }
+      }
     }
-    if (k >= 12) {
-      ctx.font = `400 ${10 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = css("--muted");
-      ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
-      for (const o of [...osm, ...gaps]) { if (!o.xy || !shown(osmPct(o))) continue; ctx.strokeText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); ctx.fillText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); }
+    if (document.getElementById("unch").checked) {  // uncharted picks as stars
+      const r = Math.max(4, Math.min(8, 3.5 + k * 0.6)) / k;
+      uncharted.slice(0, 10).forEach((u, n) => {
+        const xy = projection([u.lon, u.lat]); if (!xy || !shown(u.v)) return;
+        ctx.beginPath();
+        for (let q = 0; q < 10; q++) { const a = (q * Math.PI) / 5 - Math.PI / 2, rr = q % 2 ? r * 0.45 : r; ctx.lineTo(xy[0] + rr * Math.cos(a), xy[1] + rr * Math.sin(a)); }
+        ctx.closePath(); ctx.fillStyle = colorFor(u.v); ctx.fill(); ctx.lineWidth = 1.2 / k; ctx.strokeStyle = css("--ink"); ctx.stroke();
+      });
     }
-  }
-  if (document.getElementById("unch").checked) {  // uncharted picks as stars
-    const r = Math.max(4, Math.min(8, 3.5 + k * 0.6)) / k;
-    uncharted.slice(0, 10).forEach((u, n) => {
-      const xy = projection([u.lon, u.lat]); if (!xy || !shown(u.v)) return;
-      ctx.beginPath();
-      for (let q = 0; q < 10; q++) { const a = (q * Math.PI) / 5 - Math.PI / 2, rr = q % 2 ? r * 0.45 : r; ctx.lineTo(xy[0] + rr * Math.cos(a), xy[1] + rr * Math.sin(a)); }
-      ctx.closePath(); ctx.fillStyle = colorFor(u.v); ctx.fill(); ctx.lineWidth = 1.2 / k; ctx.strokeStyle = css("--ink"); ctx.stroke();
-    });
-  }
-  if (pointPct) {
-    const ink = css("--ink"), r = Math.max(2.6, Math.min(6, 2.2 + k * 0.5)) / k;
-    meta.points.forEach((p, i) => {
-      const xy = pointXY[i]; if (!xy || !shown(pointPct[i])) return;
-      ctx.beginPath();
-      if (p.kind === "stretch") { ctx.moveTo(xy[0], xy[1] - r * 1.3); ctx.lineTo(xy[0] + r * 1.3, xy[1]); ctx.lineTo(xy[0], xy[1] + r * 1.3); ctx.lineTo(xy[0] - r * 1.3, xy[1]); ctx.closePath(); }
-      else ctx.arc(xy[0], xy[1], p.kind === "coast" ? r * 0.85 : r, 0, 2 * Math.PI);
-      ctx.fillStyle = colorFor(pointPct[i]) || css("--land"); ctx.fill();
-      ctx.lineWidth = (p.kind === "coast" ? 1.4 : 1) / k; ctx.strokeStyle = ink; ctx.stroke();
-    });
-    if (k >= 4) {  // names once zoomed in enough to have room
-      ctx.font = `500 ${11 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = ink;
-      ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
-      meta.points.forEach((p, i) => { const xy = pointXY[i]; if (!xy || !shown(pointPct[i])) return;
-        ctx.strokeText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); ctx.fillText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); });
+    if (pointPct) {
+      const ink = css("--ink"), r = Math.max(2.6, Math.min(6, 2.2 + k * 0.5)) / k;
+      meta.points.forEach((p, i) => {
+        const xy = pointXY[i]; if (!xy || !shown(pointPct[i])) return;
+        ctx.beginPath();
+        if (p.kind === "stretch") { ctx.moveTo(xy[0], xy[1] - r * 1.3); ctx.lineTo(xy[0] + r * 1.3, xy[1]); ctx.lineTo(xy[0], xy[1] + r * 1.3); ctx.lineTo(xy[0] - r * 1.3, xy[1]); ctx.closePath(); }
+        else ctx.arc(xy[0], xy[1], p.kind === "coast" ? r * 0.85 : r, 0, 2 * Math.PI);
+        ctx.fillStyle = colorFor(pointPct[i]) || css("--land"); ctx.fill();
+        ctx.lineWidth = (p.kind === "coast" ? 1.4 : 1) / k; ctx.strokeStyle = ink; ctx.stroke();
+      });
+      if (k >= 4) {  // names once zoomed in enough to have room
+        ctx.font = `500 ${11 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = ink;
+        ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
+        meta.points.forEach((p, i) => { const xy = pointXY[i]; if (!xy || !shown(pointPct[i])) return;
+          ctx.strokeText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); ctx.fillText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); });
+      }
     }
-  }
-  if (selected) {
-    const xy = selected.type === "point" ? pointXY[selected.i] : projection([selected.lon, selected.lat]);
-    if (xy) {
-      ctx.beginPath(); ctx.arc(xy[0], xy[1], 10 / k, 0, 2 * Math.PI);
-      ctx.strokeStyle = css("--panel"); ctx.lineWidth = 5 / k; ctx.stroke();
-      ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2.5 / k; ctx.stroke();
+    if (selected) {
+      const xy = selected.type === "point" ? pointXY[selected.i] : projection([selected.lon, selected.lat]);
+      if (xy) {
+        ctx.beginPath(); ctx.arc(xy[0], xy[1], 10 / k, 0, 2 * Math.PI);
+        ctx.strokeStyle = css("--panel"); ctx.lineWidth = 5 / k; ctx.stroke();
+        ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2.5 / k; ctx.stroke();
+      }
     }
   }
   ctx.restore();
 }
 function constrain(t, view, [[bx0, by0], [bx1, by1]]) {
-  // Keep the band in view: centred across when narrower than the map, pinned to the top when shorter,
-  // so spare height collects under it, where the legend sits.
+  // Across, the map wraps, so it may pan a whole world either way. Down, it's pinned to the top when
+  // shorter than the map, so spare height collects under it, where the legend sits.
   const [[vx0, vy0], [vx1, vy1]] = view, w = (bx1 - bx0) * t.k, h = (by1 - by0) * t.k;
-  const x = w <= vx1 - vx0 ? vx0 + (vx1 - vx0 - w) / 2 - bx0 * t.k : Math.min(vx0 - bx0 * t.k, Math.max(vx1 - bx1 * t.k, t.x));
+  const x = Math.min(vx0 - (bx0 - (bx1 - bx0)) * t.k, Math.max(vx1 - (bx1 + (bx1 - bx0)) * t.k, t.x));  // wraps: a world either way
   const y = h <= vy1 - vy0 ? vy0 - by0 * t.k : Math.min(vy0 - by0 * t.k, Math.max(vy1 - by1 * t.k, t.y));
   return x === t.x && y === t.y ? t : d3.zoomIdentity.translate(x, y).scale(t.k);
 }
 const zoom = d3.zoom().scaleExtent([1, 80]).constrain(constrain).on("zoom", e => {
   transform = e.transform; moving = true; draw();
-  clearTimeout(settle); settle = setTimeout(() => { moving = false; draw(); renderTop(); }, 160);  // full resolution once still
+  clearTimeout(settle); settle = setTimeout(() => { moving = false; draw(); renderTop(); saveState(); }, 160);  // full resolution once still
 });
 d3.select(canvas).call(zoom).on("dblclick.zoom", null);
 document.getElementById("zin").onclick = () => d3.select(canvas).transition().duration(250).call(zoom.scaleBy, 2);
@@ -739,14 +810,15 @@ canvas.addEventListener("click", ev => {
   const r = canvas.getBoundingClientRect();
   const [x, y] = transform.invert([ev.clientX - r.left, ev.clientY - r.top]);
   let best = -1, bestD = (12 / transform.k) ** 2;
-  pointXY.forEach((xy, i) => { if (!xy || !shown(pointPct[i])) return; const d = (xy[0] - x) ** 2 + (xy[1] - y) ** 2; if (d < bestD) { bestD = d; best = i; } });
+  const wrapDx = dx => dx - worldW * Math.round(dx / worldW);
+  pointXY.forEach((xy, i) => { if (!xy || !shown(pointPct[i])) return; const d = wrapDx(xy[0] - x) ** 2 + (xy[1] - y) ** 2; if (d < bestD) { bestD = d; best = i; } });
   if (best >= 0) { select({ type: "point", i: best }); return; }
   if (transform.k >= 2.5) {
     let o = null, od = (8 / transform.k) ** 2;
-    for (const s of [...osm, ...gaps]) { if (!s.xy || !shown(osmPct(s))) continue; const d = (s.xy[0] - x) ** 2 + (s.xy[1] - y) ** 2; if (d < od) { od = d; o = s; } }
+    for (const s of [...osm, ...gaps]) { if (!s.xy || !shown(osmPct(s))) continue; const d = wrapDx(s.xy[0] - x) ** 2 + (s.xy[1] - y) ** 2; if (d < od) { od = d; o = s; } }
     if (o) { select({ ...nearestBeach(o.lon, o.lat), name: o.name, osm: !o.gap, gap: !!o.gap, lat: o.lat, lon: o.lon }); return; }
   }
-  const lon = lonAt(x), lat = latAt(y);
+  const lon = ((((lonAt(x) + 180) % 360) + 360) % 360) - 180, lat = latAt(y);
   select(Math.abs(lon) <= 180 && lat >= band[0] && lat <= band[1] ? nearestBeach(lon, lat) : null);
 });
 
@@ -844,8 +916,8 @@ function bestMonths(shares) {
   for (let s = 0; s < 12; s++) { const v = (shares[s] + shares[(s + 1) % 12] + shares[(s + 2) % 12]) / 3; if (v > best) { best = v; at = s; } }
   return best < 0 ? "–" : `${MONTHS[at]}–${MONTHS[(at + 2) % 12]} ${Math.round(best)}%`;
 }
-function bars(shares) {
-  const w = 340, h = 120, bw = w / 12, pad = 16, months = new Set(period.months);
+function bars(shares, h = 120) {
+  const w = 340, bw = w / 12, pad = 16, months = new Set(period.months);
   const y = v => h - pad - (Math.min(100, v || 0) / 100) * (h - pad - 14);
   return `<svg class="bars" viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="Share of good mornings by month">` +
     shares.map((v, m) => `<rect x="${m * bw + 3}" y="${y(v)}" width="${bw - 6}" height="${h - pad - y(v)}" fill="${colorFor(v) || "transparent"}" opacity="${months.has(m + 1) ? 1 : 0.45}" rx="2"></rect>` +
@@ -908,8 +980,195 @@ function coastShare(c, months) {  // good mornings at a coastal pixel, each weig
   }
   return days ? (100 * good) / 255 / days : NaN;
 }
-function select(sel) { selected = sel; draw(); renderDetail(); }
+function select(sel) { selected = sel; draw(); renderDetail(); saveState(); }
+
+// ---------- a selection as a short key: for favourites, compare and links ----------
+function keyOf(sel) {
+  if (!sel || sel.type === "land" || sel.type === "none") return "";
+  if (sel.type === "point") return "p:" + meta.points[sel.i].name;
+  const name = (sel.name || "").replace(/[:|]/g, " ");
+  return `c:${sel.lat.toFixed(3)},${sel.lon.toFixed(3)}:${name}:${sel.osm ? "o" : sel.gap ? "g" : ""}`;
+}
+function fromKey(key) {
+  if (!key) return null;
+  if (key.startsWith("p:")) { const i = meta.points.findIndex(p => p.name === key.slice(2)); return i >= 0 ? { type: "point", i } : null; }
+  const [, ll, name = "", kind = ""] = key.match(/^c:([^:]+):?([^:]*):?([og]?)$/) || [];
+  if (!ll) return null;
+  const [lat, lon] = ll.split(",").map(Number);
+  return { ...nearestBeach(lon, lat), name: name || undefined, osm: kind === "o", gap: kind === "g", lat, lon };
+}
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const local = {  // per-browser storage; private windows and blocked storage just forget
+  get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+let favs = local.get("psa.favs", []), compare = [];
+function spotRow(key, attr) {
+  const sel = fromKey(key); if (!sel) return "";
+  const d = describe(sel);
+  return `<li><button ${attr}="${esc(key)}"><span class="rank">${attr === "data-fav" ? "★" : ""}</span><span class="nm"><span class="swatch" style="background:${colorFor(d.pct)}"></span>${d.title}<span class="rg">${d.sub}</span></span><span class="pc">${isFinite(d.pct) ? Math.round(d.pct) + "%" : "–"}</span></button></li>`;
+}
+function renderMine() {
+  document.getElementById("minesec").hidden = !favs.length;
+  if (favs.length && pointPct) document.getElementById("mine").innerHTML = favs.map(k => spotRow(k, "data-fav")).join("");
+}
+function toggleFav(key) {
+  favs = favs.includes(key) ? favs.filter(f => f !== key) : [...favs, key];
+  local.set("psa.favs", favs); renderMine(); renderDetail();
+}
+function renderCompare() {
+  document.getElementById("cmpsec").hidden = !compare.length;
+  if (!compare.length || !pointPct) return;
+  document.getElementById("cmp").innerHTML = compare.map(key => {
+    const sel = fromKey(key); if (!sel) return "";
+    const d = describe(sel);
+    return `<div><div class="cmphead"><strong>${d.title}</strong><span class="pc">${isFinite(d.pct) ? Math.round(d.pct) + "%" : "–"}</span>` +
+      `<button class="x" data-cmp="${esc(key)}" aria-label="Stop comparing ${esc(d.title)}">×</button></div>${bars(d.shares, 84)}</div>`;
+  }).join("");
+}
+function toggleCompare(key) {
+  compare = compare.includes(key) ? compare.filter(c => c !== key) : [...compare, key].slice(-3);
+  renderCompare(); renderDetail(); saveState();
+}
+document.getElementById("mine").addEventListener("click", e => {
+  const b = e.target.closest("button[data-fav]"); if (!b) return;
+  const sel = fromKey(b.dataset.fav); if (!sel) return;
+  const at = sel.type === "point" ? meta.points[sel.i] : sel; select(sel); zoomTo(at.lon, at.lat);
+});
+document.getElementById("cmp").addEventListener("click", e => { const b = e.target.closest("button[data-cmp]"); if (b) toggleCompare(b.dataset.cmp); });
+
+// ---------- the whole view as a link: criteria, months, years, filter, map, selection, comparison ----------
+function stateParams() {
+  const q = new URLSearchParams();
+  q.set("c", [crit.h1, crit.t1, crit.longOn ? 1 : 0, crit.h2, crit.t2, crit.maxb, crit.clean, crit.wind, crit.angle].join("."));
+  const g = fromGroup && GROUPS.find(x => x.label === period.label);
+  q.set("m", g ? g.id : [...picked].sort((a, b) => a - b).join("."));
+  if (meta?.years) q.set("y", `${yr.from}-${yr.to}`);
+  q.set("f", minPct);
+  if (projection && transform.k > 1.01) {
+    const cx = (W / 2 - transform.x) / transform.k, cy = (H / 2 - transform.y) / transform.k;
+    q.set("v", [((((lonAt(cx) + 180) % 360) + 360) % 360 - 180).toFixed(2), latAt(cy).toFixed(2), transform.k.toFixed(2)].join(","));
+  }
+  const key = keyOf(selected); if (key) q.set("s", key);
+  if (compare.length) q.set("cmp", compare.join("|"));
+  return q;
+}
+let saveWait;
+function saveState() { clearTimeout(saveWait); saveWait = setTimeout(() => { try { history.replaceState(null, "", "#" + stateParams()); } catch {} }, 300); }
+function loadState() {  // before the first draw; returns what has to wait for the map: view and selection
+  const q = new URLSearchParams(location.hash.slice(1));
+  const c = (q.get("c") || "").split(".").map(Number);
+  if (c.length === 9 && c.every(isFinite)) {
+    [crit.h1, crit.t1, crit.longOn, crit.h2, crit.t2, crit.maxb, crit.clean, crit.wind, crit.angle] = c; crit.longOn = !!crit.longOn;
+    const i = PRESETS.findIndex(p => ids.every(id => p[id] === crit[id]) && p.longOn === crit.longOn);
+    presetSel.value = i >= 0 ? i : "custom"; syncControls();
+  }
+  const m = q.get("m");
+  if (m) {
+    const g = GROUPS.find(x => x.id === m), ms = m.split(".").map(Number).filter(x => x >= 1 && x <= 12);
+    if (g) { picked = new Set(g.months); fromGroup = true; } else if (ms.length) { picked = new Set(ms); fromGroup = false; }
+    setPeriod();
+  }
+  const y = (q.get("y") || "").split("-").map(Number);
+  if (y.length === 2 && y.every(isFinite)) setYears(y[0], y[1]);
+  if (q.has("f")) { minPct = +q.get("f") || 0; document.getElementById("minpct").value = minPct; document.getElementById("minpctv").textContent = minPct ? `${minPct}%` : "any"; }
+  compare = (q.get("cmp") || "").split("|").filter(Boolean).slice(0, 3);
+  return { view: q.get("v"), sel: q.get("s") };
+}
+function applyView(view, sel) {
+  const v = (view || "").split(",").map(Number);
+  if (v.length === 3 && v.every(isFinite)) {
+    const xy = projection([v[0], v[1]]);
+    d3.select(canvas).call(zoom.transform, d3.zoomIdentity.translate(W / 2, H / 2).scale(v[2]).translate(-xy[0], -xy[1]));
+  }
+  const s = fromKey(sel); if (s) select(s);
+}
+document.getElementById("copylink").onclick = async e => {
+  const here = /github\.io$|^localhost$|^127\.0\.0\.1$/.test(location.hostname);
+  const url = (here ? location.href.split("#")[0] : "https://jonchaconas.github.io/surf_tools/") + "#" + stateParams();
+  try { await navigator.clipboard.writeText(url); e.target.textContent = "Copied ✓"; }
+  catch { window.prompt("Copy this link:", url); }
+  setTimeout(() => { e.target.textContent = "Copy link"; }, 2000);
+};
+
+// ---------- search: named breaks, OpenStreetMap spots and towns ----------
+const norm = t => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+let searchIndex = [], hits = [], hit = -1;
+function buildSearch() {
+  searchIndex = [
+    ...meta.points.map((p, i) => ({ name: p.name, sub: p.region, rank: 0, lat: p.lat, lon: p.lon, k: 9, sel: () => ({ type: "point", i }) })),
+    ...osm.map(o => ({ name: o.name, sub: "Surf spot · OpenStreetMap", rank: 1, lat: o.lat, lon: o.lon, k: 10,
+      sel: () => ({ ...nearestBeach(o.lon, o.lat), name: o.name, osm: true, lat: o.lat, lon: o.lon }) })),
+    ...places.map(t => ({ name: t.name, sub: [t.region, t.country].filter(Boolean).join(", "), rank: 2, lat: t.lat, lon: t.lon, k: 7,
+      sel: () => nearestBeach(t.lon, t.lat) })),
+  ];
+  for (const e of searchIndex) e.key = norm(e.name);
+}
+const qEl = document.getElementById("q"), qRes = document.getElementById("qres");
+function showHits() {
+  qRes.hidden = !hits.length;
+  qRes.innerHTML = hits.map((e, n) => `<li><button role="option" data-n="${n}" aria-selected="${n === hit}">${esc(e.name)}<span>${esc(e.sub)}</span></button></li>`).join("");
+}
+function pick(e) {
+  qRes.hidden = true; qEl.value = e.name; zoomTo(e.lon, e.lat, e.k);
+  const sel = e.sel(); select(sel.type === "coast" && !sel.name ? { ...sel, name: e.name } : sel);
+}
+qEl.addEventListener("input", () => {
+  const t = norm(qEl.value.trim()); hit = -1;
+  hits = t.length < 2 ? [] : searchIndex.filter(e => e.key.includes(t))
+    .sort((a, b) => (b.key.startsWith(t) - a.key.startsWith(t)) || a.rank - b.rank || a.name.length - b.name.length).slice(0, 8);
+  showHits();
+});
+qEl.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); hit = Math.max(0, Math.min(hits.length - 1, hit + (e.key === "ArrowDown" ? 1 : -1))); showHits(); }
+  else if (e.key === "Enter" && hits.length) pick(hits[Math.max(hit, 0)]);
+  else if (e.key === "Escape") qRes.hidden = true;
+});
+qRes.addEventListener("click", e => { const b = e.target.closest("button[data-n]"); if (b) pick(hits[+b.dataset.n]); });
+document.addEventListener("click", e => { if (!e.target.closest(".search")) qRes.hidden = true; });
 const EMPTY = `<h2>Selected</h2><p class="detail-empty">Click a break, any stretch of coast or any patch of ocean to see its month-by-month chart.</p>`;
+function describe(sel) {  // what the panels show about a selection: title, badge, % good, monthly shares, facts
+  let title, sub, badge, pct, shares, typ, facts = "", side = "";
+  if (sel.type === "point") {
+    const p = meta.points[sel.i], i = sel.i;
+    title = p.name; sub = `${p.region}${p.group && p.kind === "coast" ? " · " + p.group : ""}`;
+    badge = { break: "Named break", stretch: `Under-the-radar ◆${p.num}`, coast: "Regional coast" }[p.kind];
+    pct = pointPct[i]; shares = MONTHS.map((_, m) => pointShare(i, [m + 1]));
+    typ = pointTypical(i, period.months);
+    facts = `<dt>Faces</dt><dd>${p.facing}°</dd><dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${pointWind(i, period.months)}</dd>` +
+      `<dt>Measured on</dt><dd>${p.measure === "waves" ? "total waves (no wind test)" : "either swell train"}</dd>` +
+      `<dt>Waves read at</dt><dd>${p.source || "model cell"}, ${latlon(p.cell[0], p.cell[1], 2)}</dd>`;
+  } else if (sel.type === "coast") {
+    const c = sel.c, s = R.src[c], cell = R.sources[s], open = R.open.subarray(c * 16, c * 16 + 16);
+    const pass = code => open[code & 15] >= 128 && lut.g[code >> 4];
+    const la = meta.cells.lat[cell], lo = meta.cells.lon[cell], near = nearestPoint(sel.lat, sel.lon, 60);
+    const town = nearestPlace(sel.lat, sel.lon);
+    title = sel.name || (near && near.km < 30 ? `Coast near ${near.p.name}` : town && town.km < 80 ? `Near ${town.name}` : latlon(sel.lat, sel.lon, 2));
+    sub = whereText(sel.lat, sel.lon) +
+      (town && town.km < 80 && !title.includes(town.name) ? ` · ${Math.round(town.km)} km from ${town.name}` : "") +
+      (sel.snappedKm > 5 ? ` · nearest beach to your click, ${Math.round(sel.snappedKm).toLocaleString()} km away` : "") +
+      (R.charted[c] >= lists.unfar ? ` · ${R.charted[c].toLocaleString()} km from charted surf` : "");
+    badge = sel.osm ? "Surf spot · OpenStreetMap" : sel.gap ? "Coast point" : sel.unchartedRank ? `Uncharted coast ✶${sel.unchartedRank}` : "Coastline";
+    if (sel.unchartedRank && town) title = `${town.name}, ${town.country}`;
+    const a = R.alpha[c] / 255, mix = (v, w) => !isFinite(w) ? v : !isFinite(v) ? w : a * v + (1 - a) * w;  // as on the map
+    pct = mix(coastShare(c, period.months), blend(sel.under, x => cellPct[x]));
+    shares = MONTHS.map((_, m) => mix(coastShare(c, [m + 1]), blend(sel.under, x => share(grid, lut.g, x, [m + 1]))));
+    typ = typical(coastBins, s, period.months, pass, code => code >> 4, code => code & 15);
+    side = rose(open);
+    facts = `<dt>Swell reaches it from</dt><dd>${exposure(open)}</dd>` +
+      `<dt>Waves read at</dt><dd>${meta.cells.enclosed[cell] ? "model point" : meta.res + "° model cell"} ${latlon(la, lo)}, ${Math.round(km({ lat: sel.lat, lon: sel.lon }, { lat: la, lon: lo }))} km away</dd>` +
+      `<dt>Measured on</dt><dd>${meta.cells.enclosed[cell] ? "total waves" : "swell"}</dd>`;
+  } else {
+    const wts = sel.weights, main = wts.length ? wts.reduce((a, b) => (b[1] > a[1] ? b : a))[0] : -1;
+    title = sel.name || latlon(sel.lat, sel.lon, 2);
+    badge = sel.osm ? "Surf spot · OpenStreetMap" : sel.enclosed ? "Enclosed sea" : "Open ocean";
+    sub = sel.enclosed ? `Blended from the ${wts.length} nearest model points` : `Interpolated from ${wts.length === 1 ? "the nearest" : wts.length + " nearby"} ${meta.res}° model cell${wts.length === 1 ? "" : "s"}`;
+    pct = blend(wts, c => cellPct[c]); shares = MONTHS.map((_, m) => blend(wts, c => share(grid, lut.g, c, [m + 1])));
+    typ = main >= 0 ? typical(grid, main, period.months, code => lut.g[code], code => code) : "–";
+    facts = `<dt>Swell direction</dt><dd>any: open water</dd><dt>Measured on</dt><dd>${sel.enclosed ? "total waves" : "swell"}</dd>`;
+  }
+  return { title, sub, badge, pct, shares, typ, facts, side };
+}
 function renderDetail() {
   const el = document.getElementById("detail");
   if (!selected || !pointPct) { el.innerHTML = EMPTY; return; }
@@ -919,49 +1178,17 @@ function renderDetail() {
       : "No model data here: sea ice for much of the year, or water too small for the wave models."}</p>`;
     return;
   }
-  let title, sub, badge, pct, shares, typ, facts = "", side = "";
-  if (selected.type === "point") {
-    const p = meta.points[selected.i], i = selected.i;
-    title = p.name; sub = `${p.region}${p.group && p.kind === "coast" ? " · " + p.group : ""}`;
-    badge = { break: "Named break", stretch: `Under-the-radar ◆${p.num}`, coast: "Regional coast" }[p.kind];
-    pct = pointPct[i]; shares = MONTHS.map((_, m) => pointShare(i, [m + 1]));
-    typ = pointTypical(i, period.months);
-    facts = `<dt>Faces</dt><dd>${p.facing}°</dd><dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${pointWind(i, period.months)}</dd>` +
-      `<dt>Measured on</dt><dd>${p.measure === "waves" ? "total waves (no wind test)" : "either swell train"}</dd>` +
-      `<dt>Waves read at</dt><dd>${p.source || "model cell"}, ${latlon(p.cell[0], p.cell[1], 2)}</dd>`;
-  } else if (selected.type === "coast") {
-    const c = selected.c, s = R.src[c], cell = R.sources[s], open = R.open.subarray(c * 16, c * 16 + 16);
-    const pass = code => open[code & 15] >= 128 && lut.g[code >> 4];
-    const la = meta.cells.lat[cell], lo = meta.cells.lon[cell], near = nearestPoint(selected.lat, selected.lon, 60);
-    const town = nearestPlace(selected.lat, selected.lon);
-    title = selected.name || (near && near.km < 30 ? `Coast near ${near.p.name}` : town && town.km < 80 ? `Near ${town.name}` : latlon(selected.lat, selected.lon, 2));
-    sub = whereText(selected.lat, selected.lon) +
-      (town && town.km < 80 && !title.includes(town.name) ? ` · ${Math.round(town.km)} km from ${town.name}` : "") +
-      (selected.snappedKm > 5 ? ` · nearest beach to your click, ${Math.round(selected.snappedKm).toLocaleString()} km away` : "") +
-      (R.charted[c] >= lists.unfar ? ` · ${R.charted[c].toLocaleString()} km from charted surf` : "");
-    badge = selected.osm ? "Surf spot · OpenStreetMap" : selected.gap ? "Coast point" : selected.unchartedRank ? `Uncharted coast ✶${selected.unchartedRank}` : "Coastline";
-    if (selected.unchartedRank && town) title = `${town.name}, ${town.country}`;
-    const a = R.alpha[c] / 255, mix = (v, w) => !isFinite(w) ? v : !isFinite(v) ? w : a * v + (1 - a) * w;  // as on the map
-    pct = mix(coastShare(c, period.months), blend(selected.under, x => cellPct[x]));
-    shares = MONTHS.map((_, m) => mix(coastShare(c, [m + 1]), blend(selected.under, x => share(grid, lut.g, x, [m + 1]))));
-    typ = typical(coastBins, s, period.months, pass, code => code >> 4, code => code & 15);
-    side = rose(open);
-    facts = `<dt>Swell reaches it from</dt><dd>${exposure(open)}</dd>` +
-      `<dt>Waves read at</dt><dd>${meta.cells.enclosed[cell] ? "model point" : meta.res + "° model cell"} ${latlon(la, lo)}, ${Math.round(km({ lat: selected.lat, lon: selected.lon }, { lat: la, lon: lo }))} km away</dd>` +
-      `<dt>Measured on</dt><dd>${meta.cells.enclosed[cell] ? "total waves" : "swell"}</dd>`;
-  } else {
-    const wts = selected.weights, main = wts.length ? wts.reduce((a, b) => (b[1] > a[1] ? b : a))[0] : -1;
-    title = selected.name || latlon(selected.lat, selected.lon, 2);
-    badge = selected.osm ? "Surf spot · OpenStreetMap" : selected.enclosed ? "Enclosed sea" : "Open ocean";
-    sub = selected.enclosed ? `Blended from the ${wts.length} nearest model points` : `Interpolated from ${wts.length === 1 ? "the nearest" : wts.length + " nearby"} ${meta.res}° model cell${wts.length === 1 ? "" : "s"}`;
-    pct = blend(wts, c => cellPct[c]); shares = MONTHS.map((_, m) => blend(wts, c => share(grid, lut.g, c, [m + 1])));
-    typ = main >= 0 ? typical(grid, main, period.months, code => lut.g[code], code => code) : "–";
-    facts = `<dt>Swell direction</dt><dd>any: open water</dd><dt>Measured on</dt><dd>${selected.enclosed ? "total waves" : "swell"}</dd>`;
-  }
-  el.innerHTML = `<h2>Selected</h2><div><span class="badge">${badge}</span></div><h3>${title}</h3><div class="note" style="margin-top:-6px">${sub}</div>
+  const { title, sub, badge, pct, shares, typ, facts, side } = describe(selected), key = keyOf(selected);
+  const saved = favs.includes(key), comparing = compare.includes(key);
+  el.innerHTML = `<h2>Selected</h2><div class="actions"><span class="badge">${badge}</span>
+      <button class="mini" id="favbtn" aria-pressed="${saved}">${saved ? "★ Saved" : "☆ Save"}</button>
+      <button class="mini" id="cmpbtn" aria-pressed="${comparing}">${comparing ? "✓ Comparing" : "+ Compare"}</button></div>
+    <h3>${title}</h3><div class="note" style="margin-top:-6px">${sub}</div>
     <div style="display:flex;align-items:center;gap:10px;justify-content:space-between"><div style="display:flex;align-items:baseline;gap:10px"><span class="bigpct">${isFinite(pct) ? Math.round(pct) + "%" : "–"}</span><span class="note">of mornings good · ${period.label}${yearsLabel()}</span></div>${side}</div>
     ${bars(shares)}
     <dl class="facts"><dt>Best 3 months</dt><dd>${bestMonths(shares)}</dd><dt>Typical good morning</dt><dd>${typ}</dd>${facts}</dl>`;
+  document.getElementById("favbtn").onclick = () => toggleFav(key);
+  document.getElementById("cmpbtn").onclick = () => toggleCompare(key);
 }
 function km(a, b) {
   const r = Math.PI / 180, dLa = (b.lat - a.lat) * r, dLo = (b.lon - a.lon) * r;
@@ -971,8 +1198,8 @@ function km(a, b) {
 function inView(lat, lon) {  // everywhere at the whole-world view; zoomed in, just what's on screen
   if (transform.k < 1.5) return true;
   const xy = projection([lon, lat]); if (!xy) return false;
-  const [x, y] = transform.apply(xy);
-  return x >= 0 && x <= W && y >= 0 && y <= H;
+  const y = transform.applyY(xy[1]);
+  return y >= 0 && y <= H && [-worldW, 0, worldW].some(o => { const x = transform.applyX(xy[0] + o); return x >= 0 && x <= W; });
 }
 function renderTop() {
   if (!pointPct) return;
@@ -1127,7 +1354,11 @@ async function localTools() {
     setupRaster(r, new Uint8Array(await inflate(r.cat)), await inflate(r.coast.data));
     document.getElementById("about").textContent += ` · data as of ${meta.generated}; ${meta.res}° ocean grid, coast at ${r.res}°`;
     document.getElementById("loading").hidden = true;
-    setupYears(); palette(); layout(); recompute();
+    setupYears(); buildSearch();
+    const pending = loadState();
+    palette(); layout();
+    await applyYears();  // recomputes, over the whole record or the linked years
+    applyView(pending.view, pending.sel);
   } catch (err) {
     document.getElementById("loading").textContent = `Couldn't load the data: ${err.message}. Reload the page to try again.`;
   }

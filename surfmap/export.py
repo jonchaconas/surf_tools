@@ -230,6 +230,53 @@ def _coast_points(shore, existing):
     return out
 
 
+TILE = 10  # degrees: detailed coastline tiles, fetched by the page only for the view when zoomed in
+
+
+def _clockwise(geom):
+    """Polygons (from any mix of geometries) with clockwise outer rings, as d3's spherical paths expect."""
+    from shapely.geometry import MultiPolygon
+    from shapely.geometry.polygon import orient
+
+    parts = getattr(geom, "geoms", [geom])
+    polys = [orient(g, sign=-1.0) for part in parts for g in getattr(part, "geoms", [part]) if g.geom_type == "Polygon"]
+    return MultiPolygon(polys) if polys else MultiPolygon()
+
+
+def _land_tiles():
+    """Natural Earth 1:10m land (fill) and coastline (outline) cut into TILE-degree tiles, written to
+    web/data/land10/{lat}_{lon}.json; returns the tile keys. Fills overlap their neighbours a little
+    so no hairline shows between tiles; outlines come from the coastline set, so tile edges aren't
+    drawn as coast."""
+    import cartopy.io.shapereader as shp
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+
+    lakes = [r.geometry for r in shp.Reader(shp.natural_earth("10m", "physical", "lakes")).records()
+             if r.attributes.get("name") in inland.GREAT_LAKES]
+    land = unary_union(list(shp.Reader(shp.natural_earth("10m", "physical", "land")).geometries())).difference(unary_union(lakes))
+    coast = unary_union(list(shp.Reader(shp.natural_earth("10m", "physical", "coastline")).geometries()))
+    rnd = lambda c: [rnd(x) for x in c] if isinstance(c[0], (list, tuple)) else [round(c[0], 3), round(c[1], 3)]
+    out = OUT / "land10"
+    out.mkdir(exist_ok=True)
+    for f in out.glob("*.json"):
+        f.unlink()
+    keys = []
+    for la in range(-60, 80, TILE):
+        for lo in range(-180, 180, TILE):
+            fill = land.intersection(box(lo - 0.02, la - 0.02, lo + TILE + 0.02, la + TILE + 0.02))
+            line = coast.intersection(box(lo, la, lo + TILE, la + TILE))
+            if fill.is_empty and line.is_empty:
+                continue
+            fill = _clockwise(fill.simplify(0.004, preserve_topology=True))  # d3 reads anticlockwise rings as "all but this"
+            gj = {k: mapping(g) for k, g in (("fill", fill), ("coast", line.simplify(0.004))) if not g.is_empty}
+            for g in gj.values():
+                g["coordinates"] = rnd(g["coordinates"]) if g.get("coordinates") else g.get("coordinates", [])
+            (out / f"{la}_{lo}.json").write_text(json.dumps(gj, separators=(",", ":")))
+            keys.append(f"{la}_{lo}")
+    return keys
+
+
 def _places():
     """[[name, region, country, lat, lon]] for every Natural Earth populated place (10m), so the page
     can name any stretch of coast after its nearest town."""
@@ -434,6 +481,7 @@ def export(res=2):
     (OUT / "points.b64.txt").write_text(pts)
     (OUT / "land.json").write_text(json.dumps(_land(), separators=(",", ":")))
     (OUT / "places.json").write_text(json.dumps(_places(), separators=(",", ":"), ensure_ascii=False))
+    tiles = _land_tiles()
     from . import osm
 
     land = _land_raster()
@@ -454,7 +502,7 @@ def export(res=2):
         print(f"  year {y}", flush=True)
     meta = dict(
         generated=date.today().isoformat(), res=res,
-        seasons={m: list(config.seasons(m)) for m in range(1, 13)}, years=years,
+        seasons={m: list(config.seasons(m)) for m in range(1, 13)}, years=years, tiles=tiles, tile=TILE,
         bins=dict(height_ft=H_BINS, period_s=T_BINS, period_start=5, clean=CLEAN),
         morning=[k for k, _ in MORNING], scale=[step for _, step in MORNING],
         offshore=config.OFFSHORE,
