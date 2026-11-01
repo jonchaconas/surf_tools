@@ -97,7 +97,7 @@ def _path(site):
 
 
 def fetch_site(site, lon):
-    """Morning spectra at one site, Oct 2021 to now, from the hindcast and nowcast files."""
+    """Morning spectra at one site, from the WW3 archive's start (2017) to now: hindcast and nowcast."""
     path = _path(site)
     if path.exists():
         return
@@ -106,7 +106,7 @@ def fetch_site(site, lon):
     for kind in ("hindcast", "nowcast"):
         with xr.open_dataset(URL.format(site, kind)) as d:
             t = d.waveTime.values
-            keep = np.flatnonzero((t >= np.datetime64("2021-10-01")) & (t.astype("datetime64[h]").astype(int) % 24 == hour))
+            keep = np.flatnonzero((t >= np.datetime64("2016-12-31")) & (t.astype("datetime64[h]").astype(int) % 24 == hour))
             if not len(keep):
                 continue
             sub = d[["waveHs", "waveTp", "waveDp", "waveEnergyDensity", "waveMeanDirection"]]

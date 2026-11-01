@@ -14,14 +14,15 @@ SUMMARIES = (
     ("October–March", "Best named breaks, October–March", (10, 11, 12, 1, 2, 3)),
     ("April–September", "Best named breaks, April–September", (4, 5, 6, 7, 8, 9)),
 )
-N_SEASONS = 5  # Open-Meteo only has swell partitions from Oct 2021, which caps the record
+N_SEASONS = 5     # most recent complete years per calendar month (going to 10 once downloaded)
+FIRST_YEAR = 2017  # the WW3 archive (PacIOOS) starts in January 2017
 
 
 def seasons(month):
     """The N_SEASONS most recent years in which this calendar month is complete."""
     today = date.today()
     last = today.year if month < today.month else today.year - 1
-    return range(last - N_SEASONS + 1, last + 1)
+    return range(max(last - N_SEASONS + 1, FIRST_YEAR), last + 1)
 
 # Each day is judged on one snapshot near this local solar hour (dawn-patrol conditions).
 LOCAL_HOUR = 8

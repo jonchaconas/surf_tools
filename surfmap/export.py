@@ -165,6 +165,18 @@ def _points():
     return out, base64.b64encode(gzip.compress(body, 6)).decode("ascii")
 
 
+def _places():
+    """[[name, region, country, lat, lon]] for every Natural Earth populated place (10m), so the page
+    can name any stretch of coast after its nearest town."""
+    import cartopy.io.shapereader as shp
+
+    out = []
+    for r in shp.Reader(shp.natural_earth("10m", "cultural", "populated_places_simple")).records():
+        a = r.attributes
+        out.append([a["name"], a.get("adm1name") or "", a.get("adm0name") or "", round(a["latitude"], 3), round(a["longitude"], 3)])
+    return out
+
+
 def _land():
     """Land outlines (Great Lakes cut out) as compact GeoJSON for drawing."""
     from .plot import _land as land_feature
@@ -346,13 +358,15 @@ def _raster(cells, res, dhists, land, charted):
 
 
 def export(res=2):
-    """Write web/data/{meta.json, grid.b64.txt, points.b64.txt, coast.b64.txt, land.json, raster.json, osm.json}."""
+    """Write web/data/{meta.json, grid.b64.txt, points.b64.txt, coast.b64.txt, land.json, raster.json, osm.json,
+    places.json}."""
     OUT.mkdir(parents=True, exist_ok=True)
     cells, grid, dgrid = _grid(int(res))
     (OUT / "grid.b64.txt").write_text(_pack(grid, len(cells)))
     points, pts = _points()
     (OUT / "points.b64.txt").write_text(pts)
     (OUT / "land.json").write_text(json.dumps(_land(), separators=(",", ":")))
+    (OUT / "places.json").write_text(json.dumps(_places(), separators=(",", ":"), ensure_ascii=False))
     from . import osm
 
     land = _land_raster()

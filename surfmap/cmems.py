@@ -23,6 +23,7 @@ ANFC = "cmems_mod_glo_wav_anfc_0.083deg_PT3H-i"
 REAN = "cmems_mod_glo_wav_my_0.2deg_PT3H-i"
 ANFC_START = datetime(2022, 11, 1)
 SPAN = (datetime(2021, 10, 1), datetime(2026, 11, 1))
+EARLY = (datetime(2016, 12, 31), SPAN[0] - timedelta(hours=3))  # back to the WW3 archive's start (REAN)
 VARS = {  # Open-Meteo name -> Copernicus variable
     "swell_wave_height": "VHM0_SW1", "swell_wave_period": "VTM01_SW1", "swell_wave_direction": "VMDR_SW1",
     "wind_wave_height": "VHM0_WW", "wave_height": "VHM0", "wave_period": "VTM10", "wave_direction": "VMDR",
@@ -45,15 +46,11 @@ def _missing():
                         pts = list(zip(lats[k * inland.CHUNK:(k + 1) * inland.CHUNK],
                                        lons[k * inland.CHUNK:(k + 1) * inland.CHUNK]))
                         jobs.append((path, [(float(a), float(b)) for a, b in pts], d0, d1))
-            for region, spec in regions.REGIONS.items():
-                path = regions._path(region, year, month)
-                if not path.exists():
-                    jobs.append((path, [(c[2], c[3]) for c in spec["coasts"]], d0, d1))
     return jobs
 
 
-def _cache(lat, lon):
-    return OUT / f"{lat:+.3f}_{lon:+.3f}.nc"
+def _cache(lat, lon, early=False):
+    return OUT / f"{lat:+.3f}_{lon:+.3f}{'_early' if early else ''}.nc"
 
 
 def _nearest_series(dataset, lat, lon, t0, t1):
@@ -69,13 +66,14 @@ def _nearest_series(dataset, lat, lon, t0, t1):
     return ds.isel(latitude=i, longitude=j).load()
 
 
-def _fetch_point(point):
+def _fetch_point(point, early=False):
     lat, lon = point
-    path = _cache(lat, lon)
+    path = _cache(lat, lon, early)
     if path.exists():
         return
-    parts = [_nearest_series(REAN, lat, lon, SPAN[0], ANFC_START - timedelta(hours=3)),
-             _nearest_series(ANFC, lat, lon, ANFC_START, SPAN[1])]
+    parts = [_nearest_series(REAN, lat, lon, *EARLY)] if early else \
+        [_nearest_series(REAN, lat, lon, SPAN[0], ANFC_START - timedelta(hours=3)),
+         _nearest_series(ANFC, lat, lon, ANFC_START, SPAN[1])]
     ds = xr.concat([p.drop_vars(["latitude", "longitude"]).assign_attrs(cell=(float(p.latitude), float(p.longitude)))
                     for p in parts], "time")
     tmp = path.with_suffix(".part")
@@ -90,7 +88,9 @@ def _rows(points, d0, d1):
     hours = np.arange(np.datetime64(d0, "h"), np.datetime64(d1, "h") + 24, np.timedelta64(1, "h"))
     rows = []
     for lat, lon in points:
-        with xr.open_dataset(_cache(lat, lon)) as ds:
+        paths = [p for p in (_cache(lat, lon, True), _cache(lat, lon)) if p.exists()]
+        with xr.concat([xr.open_dataset(p) for p in paths], "time", data_vars="minimal", coords="minimal",
+                       compat="override") if len(paths) > 1 else xr.open_dataset(paths[0]) as ds:
             t = ds.time.values.astype("datetime64[h]")
             idx = np.clip(np.searchsorted(t, hours), 1, len(t) - 1)
             idx -= (hours - t[idx - 1]) < (t[idx] - hours)
@@ -109,8 +109,10 @@ def fill(workers=4):
     points = sorted({p for _, pts, _, _ in jobs for p in pts})
     OUT.mkdir(parents=True, exist_ok=True)
     print(f"Copernicus: {len(jobs)} files missing, {len(points)} points to fetch", flush=True)
+    early = sorted({p for _, pts, d0, _ in jobs if d0 < SPAN[0] for p in pts})
     with ThreadPoolExecutor(workers) as ex:
         list(ex.map(_fetch_point, points))
+        list(ex.map(lambda p: _fetch_point(p, early=True), early))
     for path, pts, d0, d1 in jobs:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(_rows(pts, d0, d1)))

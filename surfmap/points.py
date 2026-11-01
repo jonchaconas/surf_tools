@@ -11,6 +11,7 @@ Needs a Copernicus Marine login (`copernicusmarine login`) and a CDS key in ~/.c
 """
 
 import threading
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
@@ -30,6 +31,7 @@ SEAWARD_DEG = 0.05   # pick the wave cell nearest a spot this far out along its 
 WIND_DEG = 0.15      # and the ERA5 point this far out, so it is over water
 KT = 1.943844        # knots per m/s
 _WRITE = threading.Lock()  # HDF5 is not thread-safe
+_CDS = threading.BoundedSemaphore(2)  # the CDS rejects bigger queues per dataset ("request sequentially")
 
 
 def all_points():
@@ -49,12 +51,12 @@ def _stem(lat, lon):
     return f"{lat:+.3f}_{lon:+.3f}"
 
 
-def _waves_path(lat, lon):
-    return OUT / f"{_stem(lat, lon)}_waves.nc"
+def _waves_path(lat, lon, early=False):
+    return OUT / f"{_stem(lat, lon)}_waves{'_early' if early else ''}.nc"
 
 
-def _wind_path(lat, lon):
-    return OUT / f"{_stem(lat, lon)}_wind.nc"
+def _wind_path(lat, lon, early=False):
+    return OUT / f"{_stem(lat, lon)}_wind{'_early' if early else ''}.nc"
 
 
 def _nearest(dataset, lat, lon, facing, t0, t1, pad=0.3):
@@ -74,14 +76,16 @@ def _nearest(dataset, lat, lon, facing, t0, t1, pad=0.3):
     return ds.isel(latitude=i, longitude=j).load()
 
 
-def _fetch_waves(lat, lon, facing):
-    from .cmems import ANFC, ANFC_START, REAN, SPAN  # imports the Copernicus client: only when fetching
+def _fetch_waves(lat, lon, facing, early=False):
+    """Copernicus waves: from cmems.SPAN on, or with early=True the reanalysis years before it."""
+    from .cmems import ANFC, ANFC_START, EARLY, REAN, SPAN  # imports the Copernicus client: only when fetching
 
-    path = _waves_path(lat, lon)
+    path = _waves_path(lat, lon, early)
     if path.exists():
         return
-    parts = [_nearest(REAN, lat, lon, facing, SPAN[0], ANFC_START - timedelta(hours=3)),
-             _nearest(ANFC, lat, lon, facing, ANFC_START, SPAN[1])]
+    parts = [_nearest(REAN, lat, lon, facing, *EARLY)] if early else \
+        [_nearest(REAN, lat, lon, facing, SPAN[0], ANFC_START - timedelta(hours=3)),
+         _nearest(ANFC, lat, lon, facing, ANFC_START, SPAN[1])]
     ds = xr.concat([p.drop_vars(["latitude", "longitude"]) for p in parts], "time")
     ds.attrs["cell"] = (float(parts[-1].latitude), float(parts[-1].longitude))  # the 1/12 degree cell
     tmp = path.with_suffix(".part")
@@ -90,23 +94,32 @@ def _fetch_waves(lat, lon, facing):
     tmp.rename(path)
 
 
-def _fetch_wind(lat, lon, facing):
+def _fetch_wind(lat, lon, facing, early=False):
     import cdsapi
 
-    from .cmems import SPAN
+    from .cmems import EARLY, SPAN
 
-    path = _wind_path(lat, lon)
+    path = _wind_path(lat, lon, early)
     if path.exists():
         return
     wla, wlo = _out(lat, lon, facing, WIND_DEG)
-    last = date.today() - timedelta(days=6)  # ERA5 runs about five days behind
+    first, last = (EARLY[0], EARLY[1]) if early else (SPAN[0], date.today() - timedelta(days=6))  # ERA5 is ~5 days behind
     tmp = path.with_suffix(".zip")
-    cdsapi.Client(quiet=True, progress=False).retrieve("reanalysis-era5-single-levels-timeseries", {
+    request = {
         "variable": ["10m_u_component_of_wind", "10m_v_component_of_wind"],
         "location": {"latitude": round(float(wla), 3), "longitude": round(float(((wlo + 180) % 360) - 180), 3)},
-        "date": [f"{SPAN[0]:%Y-%m-%d}/{last:%Y-%m-%d}"],
+        "date": [f"{first:%Y-%m-%d}/{last:%Y-%m-%d}"],
         "data_format": "netcdf",
-    }).download(str(tmp))
+    }
+    for attempt in range(6):
+        try:
+            with _CDS:
+                cdsapi.Client(quiet=True, progress=False).retrieve("reanalysis-era5-single-levels-timeseries", request).download(str(tmp))
+            break
+        except Exception as e:  # a full queue clears in a minute or two
+            if attempt == 5 or "queued requests" not in str(e):
+                raise
+            time.sleep(60)
     if zipfile.is_zipfile(tmp):
         with zipfile.ZipFile(tmp) as z:
             data = z.read(next(n for n in z.namelist() if n.endswith(".nc")))
@@ -117,16 +130,17 @@ def _fetch_wind(lat, lon, facing):
     path.with_suffix(".part").rename(path)
 
 
-def fetch(workers=4):
-    """Download waves (Copernicus) and wind (ERA5) for every point not yet cached."""
+def fetch(workers=4, early=False):
+    """Download waves (Copernicus) and wind (ERA5) for every point not yet cached; early=True
+    fetches the years before cmems.SPAN, back to the WW3 archive's start."""
     OUT.mkdir(parents=True, exist_ok=True)
     pts = {(la, lo): f for _, _, _, la, lo, f in all_points()}
     jobs = [(fn, la, lo, f) for (la, lo), f in pts.items()
-            for fn, path in ((_fetch_waves, _waves_path), (_fetch_wind, _wind_path)) if not path(la, lo).exists()]
+            for fn, path in ((_fetch_waves, _waves_path), (_fetch_wind, _wind_path)) if not path(la, lo, early).exists()]
     print(f"points: {len(pts)}, downloads to do: {len(jobs)}", flush=True)
     done = failed = 0
     with ThreadPoolExecutor(workers) as pool:
-        futures = {pool.submit(fn, la, lo, f): (fn.__name__, la, lo) for fn, la, lo, f in jobs}
+        futures = {pool.submit(fn, la, lo, f, early): (fn.__name__, la, lo) for fn, la, lo, f in jobs}
         for fut in as_completed(futures):
             what, la, lo = futures[fut]
             try:
@@ -150,6 +164,15 @@ def _local_mornings(t_utc, lon, step_h):
     return keep[first], days[first]
 
 
+def _open(paths):
+    """One dataset over the files that exist, in time order (the early years' file first)."""
+    paths = [p for p in paths if p.exists()]
+    if len(paths) == 1:
+        return xr.open_dataset(paths[0])
+    dims = [d for d in ("time", "valid_time") if d in xr.open_dataset(paths[0]).dims]
+    return xr.concat([xr.open_dataset(p) for p in paths], dims[0], data_vars="minimal", coords="minimal", compat="override")
+
+
 @lru_cache(maxsize=None)
 def mornings(lat, lon):
     """Morning arrays for one point, or None until both downloads are cached:
@@ -161,14 +184,14 @@ def mornings(lat, lon):
         return None
     from .inland import TP_RATIO
 
-    with xr.open_dataset(wp) as w:
+    with _open([_waves_path(lat, lon, True), wp]) as w:
         idx, days = _local_mornings(w.time.values, lon, 3)
         g = lambda v: w[v].values[idx].astype(float)
         out = dict(day=days, cell=tuple(w.attrs["cell"]),
                    hs1=g("VHM0_SW1"), tp1=g("VTM01_SW1") * TP_RATIO, dir1=g("VMDR_SW1"),
                    hs2=g("VHM0_SW2"), tp2=g("VTM01_SW2") * TP_RATIO, dir2=g("VMDR_SW2"),
                    hs=g("VHM0"), tm=g("VTM10"), dir=g("VMDR"), ww=g("VHM0_WW"))
-    with xr.open_dataset(vp) as v:
+    with _open([_wind_path(lat, lon, True), vp]) as v:
         t = v["valid_time"].values if "valid_time" in v else v["time"].values
         widx, wdays = _local_mornings(t, lon, 1)
         u, vv = v["u10"].values[widx].astype(float), v["v10"].values[widx].astype(float)
