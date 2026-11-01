@@ -2,3 +2,6 @@
 __pycache__/
 /data/
 *.part
+
+# screenshots from .claude/skills/publish-atlas/check_atlas.py
+/.claude/skills/publish-atlas/*.png
