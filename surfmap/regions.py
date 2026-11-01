@@ -6,6 +6,7 @@ these pages count "surfable windswell" mornings by a regional standard.
 """
 
 import json
+from functools import lru_cache
 
 import numpy as np
 
@@ -141,6 +142,7 @@ def fetch():
                 print(f"  {path.name} ({total:.0f} weighted calls so far)", flush=True)
 
 
+@lru_cache(maxsize=None)
 def _load(region, month):
     """Per coast, {variable: morning samples} for one calendar month; None until every season is cached."""
     paths = [_path(region, y, month) for y in config.seasons(month)]
@@ -194,3 +196,33 @@ def summary(region, tp_ratio):
             pct=100 * surf / max(n, 1), ocean=100 * good / max(n, 1), complete=len(parts) == 12,
             hs=med(hs), tp=med(tm), dir=_circmean(dr), wind=wind.typical(name, tuple(range(1, 13)))))
     return rows
+
+
+def _km(a, b):
+    la1, lo1, la2, lo2 = map(np.radians, (a[0], a[1], b[0], b[1]))
+    h = np.sin((la2 - la1) / 2) ** 2 + np.cos(la1) * np.cos(la2) * np.sin((lo2 - lo1) / 2) ** 2
+    return 2 * 6371 * np.arcsin(np.sqrt(h))
+
+
+@lru_cache(maxsize=None)
+def best(region, n, sep_km=160):
+    """Names of the region's n best coasts year-round by its own standard, at least sep_km apart."""
+    chosen = []
+    for r in sorted(summary(region, inland.TP_RATIO), key=lambda r: -r["pct"]):
+        if all(_km((r["lat"], r["lon"]), (c["lat"], c["lon"])) >= sep_km for c in chosen):
+            chosen.append(r)
+            if len(chosen) == n:
+                break
+    return tuple(c["name"] for c in chosen)
+
+
+def coast_pct(region, months, std, tp_ratio):
+    """{coast: (lat, lon, % of mornings meeting std)} over the given months; {} while any is downloading."""
+    data = [_load(region, m) for m in months]
+    if any(d is None for d in data):
+        return {}
+    out = {}
+    for k, (name, _, lat, lon, facing, *_) in enumerate(REGIONS[region]["coasts"]):
+        parts = [_tally(d[k], facing, tp_ratio, std) for d in data]
+        out[name] = (lat, lon, 100 * sum(p["surf"] for p in parts) / max(sum(p["n"] for p in parts), 1))
+    return out

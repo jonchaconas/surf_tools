@@ -32,10 +32,11 @@ PC = ccrs.PlateCarree()
 MAP_CENTER = 10  # central longitude of the world maps
 HALO = [pe.withStroke(linewidth=2.2, foreground="white")]
 
-INSETS = [  # title, basins it shows, extent (lon0, lon1, lat0, lat1)
-    ("Great Lakes", ("great_lakes",), (-94.2, -75.5, 40.8, 49.3)),
-    ("Mediterranean & Black Sea", ("mediterranean", "black_sea"), (-6.5, 42.5, 30.0, 47.5)),
-    ("Caspian Sea", ("caspian",), (45.8, 55.5, 36.2, 47.5)),
+INSETS = [  # title, basins it shows, extent (lon0, lon1, lat0, lat1), regional pages whose best coasts it labels
+    ("Great Lakes", ("great_lakes",), (-94.2, -75.5, 40.8, 49.3), (("Lake Michigan", 2), ("Lake Superior", 2))),
+    ("Mediterranean & Black Sea", ("mediterranean", "black_sea"), (-6.5, 42.5, 30.0, 47.5),
+     (("Mediterranean", 4), ("Greece", 1), ("Black Sea", 2))),
+    ("Caspian Sea", ("caspian",), (45.8, 55.5, 36.2, 47.5), (("Caspian Sea", 3),)),
 ]
 
 plt.rcParams.update({
@@ -161,7 +162,24 @@ def _table(fig, rect, spots, stretches, title, breakout_page):
         y -= step
 
 
-def _inset(fig, rect, title, basins, extent, field, nodata, land, spots, ready):
+def _inset_labels(sources, m):
+    """The best coasts from each regional page (fixed across pages), with this period's % under the
+    relaxed enclosed-sea standard the inset is contoured with."""
+    from . import inland, regions
+
+    ratio = m.tp_ratio or inland.TP_RATIO
+    labels, seen = [], set()
+    for region, n in sources:
+        values = regions.coast_pct(region, m.months, regions.LAKE, ratio)
+        for name in regions.best(region, n):
+            if name in values and name not in seen:
+                lat, lon, pct = values[name]
+                labels.append(dict(name=name, lat=lat, lon=lon, pct=pct))
+                seen.add(name)
+    return labels
+
+
+def _inset(fig, rect, title, basins, extent, field, nodata, land, labels, ready):
     lon0, lon1, lat0, lat1 = extent
     ax = fig.add_axes(rect, projection=ccrs.Mercator(central_longitude=(lon0 + lon1) / 2))
     ax.set_extent(extent, crs=PC)
@@ -169,12 +187,19 @@ def _inset(fig, rect, title, basins, extent, field, nodata, land, spots, ready):
     rows = (LAT > lat0 - pad) & (LAT < lat1 + pad)
     cols = (LON > lon0 - pad) & (LON < lon1 + pad)
     _draw(ax, field, nodata, land, rows, cols)
-    mine = [s for s in spots if s["basin"] in basins]
-    ax.scatter([s["lon"] for s in mine], [s["lat"] for s in mine], s=10, c=INK,
+    ax.scatter([s["lon"] for s in labels], [s["lat"] for s in labels], s=10, c=INK,
                edgecolors="white", linewidths=0.6, transform=PC, zorder=5)
-    for s in mine:
-        ax.text(s["lon"], s["lat"] + 0.012 * (lat1 - lat0) * 3, f"{s['name']} {s['pct']:.0f}%",
-                fontsize=6.5, ha="center", va="bottom", transform=PC, zorder=6, path_effects=HALO)
+    for s in labels:
+        # Close neighbours split sideways (west one to the left, east one to the right); others sit above.
+        near = [o for o in labels if o is not s and abs(o["lon"] - s["lon"]) < 0.25 * (lon1 - lon0)
+                and abs(o["lat"] - s["lat"]) < 0.12 * (lat1 - lat0)]
+        if near:
+            west = all(s["lon"] < o["lon"] for o in near)
+            x, y, ha, va = s["lon"] + (-1 if west else 1) * 0.015 * (lon1 - lon0), s["lat"], "right" if west else "left", "center"
+        else:
+            x, y, ha, va = s["lon"], s["lat"] + 0.036 * (lat1 - lat0), "center", "bottom"
+        ax.text(x, y, f"{s['name']} {s['pct']:.0f}%", fontsize=6.5, ha=ha, va=va, transform=PC, zorder=6,
+                path_effects=HALO)
     sep = "\n" if rect[2] < 0.15 else "  \u00b7  "  # narrow insets put the standard on its own line
     ax.set_title(f"{title}{sep}good = 4 ft @ 6 s", fontsize=9.5, weight="bold", loc="left", pad=4)
     if any(b not in ready for b in basins):
@@ -187,7 +212,7 @@ def _inset_rects(fig, bottom, height, left=0.02, right=0.98):
     """Inset boxes sized to each map's projected aspect, spread with equal gaps across the page."""
     fw, fh = fig.get_size_inches()
     widths = []
-    for _, _, (lon0, lon1, lat0, lat1) in INSETS:
+    for _, _, (lon0, lon1, lat0, lat1), _ in INSETS:
         proj = ccrs.Mercator(central_longitude=(lon0 + lon1) / 2)
         (x0, y0, _), (x1, y1, _) = proj.transform_points(PC, np.array([lon0, lon1]), np.array([lat0, lat1]))
         widths.append(height * fh * (x1 - x0) / (y1 - y0) / fw)
@@ -238,8 +263,8 @@ def page(pdf, m, land, breakout_page):
 
     _table(fig, [0.77, 0.36, 0.215, 0.57], spots, stretches, m.table_title, breakout_page)
 
-    for (title, basins, extent), rect in zip(INSETS, _inset_rects(fig, bottom=0.068, height=0.235)):
-        _inset(fig, rect, title, basins, extent, field, nodata, land, spots, m.ready)
+    for (title, basins, extent, sources), rect in zip(INSETS, _inset_rects(fig, bottom=0.068, height=0.235)):
+        _inset(fig, rect, title, basins, extent, field, nodata, land, _inset_labels(sources, m), m.ready)
 
     fig.text(0.02, 0.045, rating.rule_text(), fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.028,
