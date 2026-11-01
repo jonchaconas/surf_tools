@@ -450,6 +450,10 @@ def _new_page(title, subtitle):
 
 
 def _region_subtitle(std, tp_ratio):
+    if std.get("ocean"):
+        rule = rating.rule_text().replace(" Judged on", "\nJudged on")  # too long for one line at this size
+        return (rule + " Open-ocean coasts, so the same good+ standard as the world maps, from M\u00e9t\u00e9o-France "
+                "MFWAM at each coast's ~8 km model cell, with swell aimed at the shore.")
     period = (f"dominant period \u2265 {std['min_period']:g} s (taken as {tp_ratio:.2f}\u00d7 the mean period)"
               if std["peak"] else f"mean period \u2265 {std['min_period']:g} s")
     return (f"{std['name']} = total wave height {std['min_hs'] * rating.FT:.0f}\u2013{std['max_hs'] * rating.FT:.0f} ft "
@@ -550,8 +554,10 @@ def _region_footer(fig, rows, std):
     pending = "" if all(r["complete"] for r in rows) else \
         " Months marked \u2013 are still downloading."
     fig.text(0.02, 0.05, "M\u00e9t\u00e9o-France MFWAM (via Open-Meteo and Copernicus Marine) at each coast's model cell, a few km "
-             f"offshore. Typical {std['noun']} morning = medians over {std['noun']} mornings: total wave height @ "
-             f"{'dominant' if std['peak'] else 'mean'} period and the direction waves come from." + pending,
+             f"offshore. Typical {std['noun']} morning = medians over {std['noun']} mornings: "
+             + ("swell height @ peak period and the direction it comes from." if std.get("ocean") else
+                f"total wave height @ {'dominant' if std['peak'] else 'mean'} period and the direction waves come from.")
+             + pending,
              fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.033, f"Coasts are ranked by year-round {std['noun']} %. " + WIND_NOTE +
              " Neither standard uses wind; check it before paddling out.",

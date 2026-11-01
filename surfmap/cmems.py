@@ -9,6 +9,7 @@ period, as for the Great Lakes. Needs a Copernicus Marine login (`copernicusmari
 """
 
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
@@ -28,6 +29,7 @@ VARS = {  # Open-Meteo name -> Copernicus variable
 }
 PAD = 0.3  # degrees searched around each point for the nearest cell with data
 OUT = config.DATA / "cmems"
+_WRITE = threading.Lock()  # HDF5 is not thread-safe: one netCDF write at a time
 
 
 def _missing():
@@ -77,7 +79,8 @@ def _fetch_point(point):
     ds = xr.concat([p.drop_vars(["latitude", "longitude"]).assign_attrs(cell=(float(p.latitude), float(p.longitude)))
                     for p in parts], "time")
     tmp = path.with_suffix(".part")
-    ds.to_netcdf(tmp)
+    with _WRITE:
+        ds.to_netcdf(tmp)
     tmp.rename(path)
     print(f"  {path.name}", flush=True)
 

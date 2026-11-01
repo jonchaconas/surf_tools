@@ -17,6 +17,8 @@ from . import config, inland, rating, ww3
 # period, estimated from the mean wave period. Regions use WINDSWELL unless they set their own.
 WINDSWELL = dict(noun="surfable", name="Surfable windswell", min_hs=0.9, max_hs=3.0, min_period=5.0, peak=False)
 LAKE = dict(noun="good", name="Good lake surf", min_hs=1.22, max_hs=3.0, min_period=6.0, peak=True)  # 4 ft @ 6 s
+# Open-ocean coasts use the good+ rule itself (rating.is_good on the swell, aimed at the shore).
+OCEAN = dict(noun="good+", name="Good+ surf", ocean=True)
 
 # extent (lon0, lon1, lat0, lat1); coasts are (name, area, lat, lon, facing), the point a few km offshore,
 # optionally followed by a (lon, lat) for the map label where coasts crowd together.
@@ -112,6 +114,36 @@ REGIONS = {
         ("Varna", "Bulgaria", 43.20, 28.00, 90),
         ("Sozopol", "Bulgaria", 42.43, 27.75, 70),
     ]),
+    "Madagascar": dict(extent=(42.3, 51.6, -26.2, -11.4), standard=OCEAN, coasts=[
+        ("Lavanono", "Deep south", -25.45, 44.95, 190),
+        ("Fort Dauphin", "Tolagnaro, southeast", -25.05, 47.03, 120),
+        ("Anakao", "Toliara, southwest", -23.66, 43.60, 250),
+        ("Ifaty", "Toliara, southwest", -23.15, 43.55, 270),
+        ("Andavadoaka", "Morombe, west", -22.07, 43.18, 270),
+        ("Morondava", "West", -20.28, 44.20, 260),
+        ("Maintirano", "West", -18.06, 43.96, 270),
+        ("Mahajanga", "Northwest", -15.68, 46.26, 310),
+        ("Nosy Be", "Northwest", -13.40, 48.18, 220),
+        ("Ramena", "Antsiranana, north", -12.20, 49.42, 70),
+        ("Sainte-Marie", "Nosy Boraha, east", -17.00, 49.92, 90),
+        ("Mahambo", "East", -17.48, 49.52, 80),
+        ("Manakara", "Southeast", -22.15, 48.07, 100),
+    ]),
+    "Peru": dict(extent=(-82.2, -70.0, -18.6, -3.3), standard=OCEAN, coasts=[  # north to south
+        ("Máncora", "Piura", -4.08, -81.11, 290, (-80.45, -3.85)),
+        ("Cabo Blanco", "Piura", -4.23, -81.28, 300, (-81.75, -4.0)),
+        ("Lobitos", "Piura", -4.44, -81.33, 290, (-81.75, -4.75)),
+        ("Pacasmayo", "La Libertad", -7.42, -79.62, 250, (-80.6, -7.15)),
+        ("Chicama", "La Libertad", -7.72, -79.49, 250, (-80.6, -7.75)),
+        ("Huanchaco", "Trujillo", -8.10, -79.17, 250, (-80.3, -8.35)),
+        ("Huarmey", "Áncash", -10.10, -78.21, 243),
+        ("Miraflores", "Lima", -12.17, -77.07, 220, (-78.4, -11.85)),
+        ("Punta Hermosa", "Lima", -12.38, -76.86, 220, (-78.4, -12.45)),
+        ("Cerro Azul", "Lima", -13.07, -76.51, 220, (-77.9, -13.25)),
+        ("Camaná", "Arequipa", -16.66, -72.72, 193, (-74.2, -16.45)),
+        ("Mollendo", "Arequipa", -17.06, -72.05, 220, (-73.6, -17.25)),
+        ("Ilo", "Moquegua", -17.67, -71.39, 240, (-72.8, -17.95)),
+    ]),
 }
 OUT = config.DATA / "regions"
 
@@ -162,18 +194,24 @@ def standard(region):
 
 
 def _tally(m, facing, tp_ratio, std):
-    hs, frm = m["wave_height"], m["wave_direction"]
-    tm = m["wave_period"] * (tp_ratio if std["peak"] else 1.0)
-    with np.errstate(invalid="ignore"):
-        surf = (hs >= std["min_hs"]) & (hs <= std["max_hs"]) & (tm >= std["min_period"]) & \
-            rating.exposed(frm, facing)
+    """Mornings meeting the region's standard ("surf") and ocean good+ ("good"), and what the former
+    looked like: total sea for the windswell and lake standards, the swell for the ocean one."""
     peak, mean = m["swell_wave_peak_period"], m["swell_wave_period"]
     # No peak period on the Great Lakes or in Copernicus-filled years: estimate it, as in inland.load.
     tp = np.where(np.isnan(peak) & np.isfinite(mean), mean * tp_ratio, peak)
     good = rating.is_good(m["swell_wave_height"], tp, m["wind_wave_height"]) & \
         rating.exposed(m["swell_wave_direction"], facing)
+    hs = m["wave_height"]
+    if std.get("ocean"):
+        surf, shown = good, (m["swell_wave_height"], tp, m["swell_wave_direction"])
+    else:
+        tm = m["wave_period"] * (tp_ratio if std["peak"] else 1.0)
+        with np.errstate(invalid="ignore"):
+            surf = (hs >= std["min_hs"]) & (hs <= std["max_hs"]) & (tm >= std["min_period"]) & \
+                rating.exposed(m["wave_direction"], facing)
+        shown = (hs, tm, m["wave_direction"])
     return dict(surf=int(surf.sum()), good=int(good.sum()), n=int(np.isfinite(hs).sum()),
-                hs=hs[surf], tm=tm[surf], dir=frm[surf])
+                hs=shown[0][surf], tm=shown[1][surf], dir=shown[2][surf])
 
 
 def summary(region, tp_ratio):
