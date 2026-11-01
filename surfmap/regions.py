@@ -11,20 +11,23 @@ import numpy as np
 
 from . import config, inland, rating, ww3
 
-# Surfable windswell: total wave height MIN_HS-MAX_HS m with mean period >= MIN_PERIOD s,
-# arriving within config.EXPOSURE degrees of the shore's facing.
-MIN_HS, MAX_HS, MIN_PERIOD = 0.9, 3.0, 5.0
+# A regional standard: total wave height min_hs-max_hs m with period >= min_period s, arriving
+# within config.EXPOSURE degrees of the shore's facing. peak=True compares the dominant (peak)
+# period, estimated from the mean wave period. Regions use WINDSWELL unless they set their own.
+WINDSWELL = dict(noun="surfable", name="Surfable windswell", min_hs=0.9, max_hs=3.0, min_period=5.0, peak=False)
+LAKE = dict(noun="good", name="Good lake surf", min_hs=1.22, max_hs=3.0, min_period=6.0, peak=True)  # 4 ft @ 6 s
 
 # extent (lon0, lon1, lat0, lat1); coasts are (name, area, lat, lon, facing), the point a few km offshore,
 # optionally followed by a (lon, lat) for the map label where coasts crowd together.
 REGIONS = {
-    "Lake Michigan": dict(extent=(-88.4, -85.4, 41.45, 45.0), coasts=[
+    "Lake Michigan": dict(extent=(-88.4, -85.4, 41.45, 45.0),
+                          standard=LAKE, coasts=[
         ("Whiting", "Indiana", 41.71, -87.48, 20, (-87.72, 41.58)),
         ("Gary", "Indiana", 41.68, -87.30, 0, (-87.38, 41.50)),
         ("Portage", "Indiana", 41.66, -87.17, 355, (-87.02, 41.50)),
         ("Chicago", "Illinois", 41.96, -87.60, 80, (-87.30, 42.12)),
         ("Racine", "Wisconsin", 42.74, -87.74, 90),
-        ("Milwaukee", "Wisconsin", 43.06, -87.84, 90),
+        ("Milwaukee", "Wisconsin", 43.06, -87.84, 90, (-88.05, 43.12)),
         ("Sheboygan", "Wisconsin", 43.75, -87.66, 90),
         ("New Buffalo", "Michigan", 41.83, -86.78, 320, (-86.50, 41.70)),
         ("St. Joseph", "Michigan", 42.11, -86.53, 280, (-86.30, 42.20)),
@@ -32,6 +35,19 @@ REGIONS = {
         ("Grand Haven", "Michigan", 43.06, -86.29, 270),
         ("Ludington", "Michigan", 43.95, -86.50, 270),
         ("Frankfort", "Michigan", 44.63, -86.30, 270),
+    ]),
+    "Lake Superior": dict(extent=(-92.4, -84.3, 46.3, 49.1), standard=LAKE, coasts=[
+        ("Park Point", "Duluth, Minnesota", 46.74, -92.04, 120),
+        ("Stoney Point", "Minnesota", 46.91, -91.79, 135),
+        ("Grand Marais MN", "Minnesota", 47.73, -90.33, 170),
+        ("Little Girl's Point", "Michigan", 46.65, -90.32, 0),
+        ("Ontonagon", "Michigan", 46.91, -89.33, 320),
+        ("Marquette", "Michigan", 46.57, -87.36, 30),
+        ("Au Train", "Michigan", 46.46, -86.84, 0),
+        ("Grand Marais MI", "Michigan", 46.70, -85.98, 0, (-86.05, 46.42)),
+        ("Whitefish Point", "Michigan", 46.79, -85.00, 330, (-85.25, 47.12)),
+        ("Agawa Bay", "Ontario", 47.35, -84.72, 260),
+        ("Terrace Bay", "Ontario", 48.75, -87.10, 190),
     ]),
     "Mediterranean": dict(extent=(-6.0, 36.5, 30.0, 46.0), coasts=[  # round the basin, Spain first
         ("Barcelona", "Spain", 41.37, 2.23, 130, (1.4, 40.75)),
@@ -139,10 +155,16 @@ def _load(region, month):
     return [{v: np.concatenate(a) for v, a in d.items()} for d in per]
 
 
-def _tally(m, facing, tp_ratio):
-    hs, tm, frm = m["wave_height"], m["wave_period"], m["wave_direction"]
+def standard(region):
+    return REGIONS[region].get("standard", WINDSWELL)
+
+
+def _tally(m, facing, tp_ratio, std):
+    hs, frm = m["wave_height"], m["wave_direction"]
+    tm = m["wave_period"] * (tp_ratio if std["peak"] else 1.0)
     with np.errstate(invalid="ignore"):
-        surf = (hs >= MIN_HS) & (hs <= MAX_HS) & (tm >= MIN_PERIOD) & rating.exposed(frm, facing)
+        surf = (hs >= std["min_hs"]) & (hs <= std["max_hs"]) & (tm >= std["min_period"]) & \
+            rating.exposed(frm, facing)
     peak, mean = m["swell_wave_peak_period"], m["swell_wave_period"]
     # No peak period on the Great Lakes or in Copernicus-filled years: estimate it, as in inland.load.
     tp = np.where(np.isnan(peak) & np.isfinite(mean), mean * tp_ratio, peak)
@@ -161,7 +183,7 @@ def summary(region, tp_ratio):
     monthly = {m: _load(region, m) for m in range(1, 13)}
     rows = []
     for k, (name, area, lat, lon, facing, *label) in enumerate(REGIONS[region]["coasts"]):
-        parts = {m: _tally(d[k], facing, tp_ratio) for m, d in monthly.items() if d is not None}
+        parts = {m: _tally(d[k], facing, tp_ratio, standard(region)) for m, d in monthly.items() if d is not None}
         surf, good, n = (sum(p[f] for p in parts.values()) for f in ("surf", "good", "n"))
         hs, tm, dr = (np.concatenate([p[f] for p in parts.values()]) if parts else np.array([])
                       for f in ("hs", "tm", "dir"))

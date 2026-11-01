@@ -413,14 +413,13 @@ def _new_page(title, subtitle):
     return fig
 
 
-def _region_subtitle():
-    from . import regions
-
-    return (f"Surfable windswell = total wave height {regions.MIN_HS * rating.FT:.0f}\u2013"
-            f"{regions.MAX_HS * rating.FT:.0f} ft ({regions.MIN_HS:g}\u2013{regions.MAX_HS:g} m) with mean period "
-            f"\u2265 {regions.MIN_PERIOD:g} s, arriving within {config.EXPOSURE}\u00b0 of the shore's facing, on the "
-            f"~{config.LOCAL_HOUR:02d}:00 sample.\nEnclosed seas rarely see groundswell, so this regional standard "
-            f"sits alongside ocean good+, the open-ocean standard used on the other pages.")
+def _region_subtitle(std, tp_ratio):
+    period = (f"dominant period \u2265 {std['min_period']:g} s (taken as {tp_ratio:.2f}\u00d7 the mean period)"
+              if std["peak"] else f"mean period \u2265 {std['min_period']:g} s")
+    return (f"{std['name']} = total wave height {std['min_hs'] * rating.FT:.0f}\u2013{std['max_hs'] * rating.FT:.0f} ft "
+            f"({std['min_hs']:g}\u2013{std['max_hs']:g} m) with {period}, arriving within {config.EXPOSURE}\u00b0 of "
+            f"the shore's facing, on the ~{config.LOCAL_HOUR:02d}:00 sample.\nEnclosed seas rarely see groundswell, "
+            f"so this regional standard sits alongside ocean good+, the open-ocean standard used on the other pages.")
 
 
 def _region_map(fig, rect, spec, rows, land):
@@ -449,7 +448,7 @@ def _region_map(fig, rect, spec, rows, land):
             ax.text(x, y, r["name"], fontsize=8, ha=ha, va=va, transform=PC, zorder=6, path_effects=HALO)
 
 
-def _region_season(fig, rect, rows):
+def _region_season(fig, rect, rows, std):
     """The region's average surfable % by calendar month."""
     months = np.array([r["months"] for r in rows])
     avg = [np.mean(months[:, k]) if np.isfinite(months[:, k]).all() else np.nan for k in range(12)]
@@ -461,7 +460,7 @@ def _region_season(fig, rect, rows):
         else:
             bx.text(k, 0.5, "pending", ha="center", va="bottom", fontsize=7, color=INK_3, rotation=90)
     bx.set_xticks(range(12), [calendar.month_abbr[m] for m in range(1, 13)])
-    bx.set_title("Average of these coasts: % of mornings with surfable windswell", fontsize=10.5,
+    bx.set_title(f"Average of these coasts: % of mornings with {std['name'].lower()}", fontsize=10.5,
                  weight="bold", loc="left", pad=8)
     bx.spines[["top", "right", "left"]].set_visible(False)
     bx.spines["bottom"].set_color(COAST)
@@ -470,7 +469,7 @@ def _region_season(fig, rect, rows):
     bx.set_ylim(0, max(10, np.nanmax(avg) * 1.18) if np.isfinite(avg).any() else 10)
 
 
-def _region_table(fig, rect, rows):
+def _region_table(fig, rect, rows, std):
     tx = fig.add_axes(rect)
     tx.axis("off")
     tx.set_xlim(0, 1)
@@ -481,7 +480,7 @@ def _region_table(fig, rect, rows):
     y = 1 - h / 2
     for x, label, ha in [(0.0, "#", "left"), (0.022, "Coast", "left"), (0.12, "Area", "left"),
                          (x_year, "Year", "center"), (x_best, "Best 3 months", "left"),
-                         (x_ocean, "Ocean good+", "center"), (x_good, "Typical surfable morning", "left"),
+                         (x_ocean, "Ocean good+", "center"), (x_good, f"Typical {std['noun']} morning", "left"),
                          (x_wind, "Morning wind", "left")]:
         tx.text(x, y, label, fontsize=8.5, weight="bold", color=INK_2, ha=ha, va="center")
     for k, mon in enumerate("JFMAMJJASOND"):
@@ -511,13 +510,14 @@ def _region_table(fig, rect, rows):
         tx.text(x_wind, y, _wind_text(r["wind"]) or "\u2013", fontsize=8.5, color=INK_2, va="center")
 
 
-def _region_footer(fig, rows):
+def _region_footer(fig, rows, std):
     pending = "" if all(r["complete"] for r in rows) else \
         " Months marked \u2013 are still downloading."
     fig.text(0.02, 0.05, "M\u00e9t\u00e9o-France MFWAM (via Open-Meteo and Copernicus Marine) at each coast's model cell, a few km "
-             "offshore. Typical surfable morning = medians over surfable mornings: total wave height @ mean period "
-             "and the direction waves come from." + pending, fontsize=7.5, color=INK_2, va="top")
-    fig.text(0.02, 0.033, "Coasts are ranked by year-round surfable %. " + WIND_NOTE +
+             f"offshore. Typical {std['noun']} morning = medians over {std['noun']} mornings: total wave height @ "
+             f"{'dominant' if std['peak'] else 'mean'} period and the direction waves come from." + pending,
+             fontsize=7.5, color=INK_2, va="top")
+    fig.text(0.02, 0.033, f"Coasts are ranked by year-round {std['noun']} %. " + WIND_NOTE +
              " Neither standard uses wind; check it before paddling out.",
              fontsize=7.5, color=INK_3, va="top")
 
@@ -530,26 +530,27 @@ def region_page(pdf, region, land):
 
     spec = regions.REGIONS[region]
     tp_ratio = next((r for r in (month_counts(m).tp_ratio for m in range(1, 13)) if r), 1.29)
+    std = regions.standard(region)
     rows = sorted(regions.summary(region, tp_ratio), key=lambda r: -r["pct"])  # ranked by year-round surfable %
 
     if len(rows) <= SPLIT_ROWS:
-        fig = _new_page(f"{region}: when and where it's surfable", _region_subtitle())
+        fig = _new_page(f"{region}: when and where it's {std['noun']}", _region_subtitle(std, tp_ratio))
         table_h = (len(rows) + 1.3) * 0.022  # the table grows with the coasts; map and chart share the rest
         top = 0.07 + table_h + 0.045
         _region_map(fig, [0.02, top, 0.44, 0.87 - top], spec, rows, land)
-        _region_season(fig, [0.53, top + 0.04, 0.44, 0.83 - top - 0.04], rows)
-        _region_table(fig, [0.02, 0.07, 0.96, table_h], rows)
-        _region_footer(fig, rows)
+        _region_season(fig, [0.53, top + 0.04, 0.44, 0.83 - top - 0.04], rows, std)
+        _region_table(fig, [0.02, 0.07, 0.96, table_h], rows, std)
+        _region_footer(fig, rows, std)
         pdf.savefig(fig, dpi=220)
         return fig
 
-    overview = _new_page(f"{region}: when and where it's surfable", _region_subtitle())
+    overview = _new_page(f"{region}: when and where it's {std['noun']}", _region_subtitle(std, tp_ratio))
     _region_map(overview, [0.02, 0.33, 0.96, 0.55], spec, rows, land)
-    _region_season(overview, [0.1, 0.06, 0.8, 0.2], rows)
+    _region_season(overview, [0.1, 0.06, 0.8, 0.2], rows, std)
     pdf.savefig(overview, dpi=220)
-    table = _new_page(f"{region}: coast by coast", _region_subtitle())
-    _region_table(table, [0.02, 0.08, 0.96, 0.8], rows)
-    _region_footer(table, rows)
+    table = _new_page(f"{region}: coast by coast", _region_subtitle(std, tp_ratio))
+    _region_table(table, [0.02, 0.08, 0.96, 0.8], rows, std)
+    _region_footer(table, rows, std)
     pdf.savefig(table, dpi=220)
     return [overview, table]
 
