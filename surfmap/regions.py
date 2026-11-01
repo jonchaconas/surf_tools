@@ -32,11 +32,13 @@ REGIONS = {
     ]),
     "Lake Michigan": dict(extent=(-88.4, -85.4, 41.45, 45.0), coasts=[
         ("Whiting", "Indiana", 41.71, -87.48, 20),
+        ("Gary", "Indiana", 41.68, -87.30, 0),
         ("Portage", "Indiana", 41.66, -87.17, 355),
         ("Chicago", "Illinois", 41.96, -87.60, 80),
         ("Racine", "Wisconsin", 42.74, -87.74, 90),
         ("Milwaukee", "Wisconsin", 43.06, -87.84, 90),
         ("Sheboygan", "Wisconsin", 43.75, -87.66, 90),
+        ("New Buffalo", "Michigan", 41.83, -86.78, 320),
         ("St. Joseph", "Michigan", 42.11, -86.53, 280),
         ("Holland", "Michigan", 42.77, -86.25, 270),
         ("Grand Haven", "Michigan", 43.06, -86.29, 270),
