@@ -233,7 +233,7 @@ def _open_sectors(lat, lon, land, ray_km):
     return np.round(out / RAYS * 255).astype(np.uint8)
 
 
-def _raster(cells, res, dhists):
+def _raster(cells, res, dhists, land, charted):
     """Everything the page needs to draw a smooth field that follows the coast, on the 0.25 degree grid:
     cat: 0 ocean (interpolate the ocean grid), 1 enclosed sea (inverse-distance from its own points),
          2 water no source reaches (shown as no data), 3 land.
@@ -241,7 +241,8 @@ def _raster(cells, res, dhists):
     swell only counts from sectors open to it, read from its nearest seaward source cell. Its weight
     (alpha) fades from 1 at the shore toward the band's outer edge, so it meets the open-water field
     without a seam. A strip of land along the shore copies the nearest coastal value, so contours
-    meet the coastline."""
+    meet the coastline. Each coastal pixel also records how far it is from the nearest charted
+    spot (named breaks, regional coasts, OpenStreetMap surf spots), for the uncharted highlight."""
     from scipy.ndimage import binary_dilation, distance_transform_edt
     from scipy.spatial import cKDTree
     from shapely import contains_xy
@@ -288,7 +289,7 @@ def _raster(cells, res, dhists):
     clat, clon = la.ravel()[ci], lo.ravel()[ci]
     in_basin = basin_of.ravel()[ci]
     print(f"  coastal pixels: {len(ci)}; casting exposure rays", flush=True)
-    masks = _open_sectors(clat, clon, _land_raster(), np.where(in_basin >= 0, BASIN_RAY_KM, RAY_KM))
+    masks = _open_sectors(clat, clon, land, np.where(in_basin >= 0, BASIN_RAY_KM, RAY_KM))
     src = np.full(len(ci), -1, np.int32)
     dist, cand = otree.query(_xyz(clat, clon), k=8)
     for n in range(len(ci)):
@@ -313,6 +314,8 @@ def _raster(cells, res, dhists):
     alpha = np.clip((band + 0.5 - to_land.ravel()[ci]) / (band - 1), 0, 1)
     ok = src >= 0
     ci, masks, src, alpha = ci[ok], masks[ok], src[ok], alpha[ok]
+    ctree = cKDTree(_xyz(np.array([c[0] for c in charted]), np.array([c[1] for c in charted])))
+    charted_km = np.minimum(ctree.query(_xyz(clat[ok], clon[ok]))[0] * 6371, 65535).astype(np.uint16)
     sources = sorted(set(src.tolist()))
     sidx = {c: k for k, c in enumerate(sources)}
 
@@ -330,7 +333,7 @@ def _raster(cells, res, dhists):
 
     coast_bin = (ci.astype(np.uint32).tobytes() + fringe.astype(np.uint32).tobytes()
                  + fringe_to.astype(np.uint32).tobytes()
-                 + np.array([sidx[c] for c in src], np.uint16).tobytes() + masks.tobytes()
+                 + np.array([sidx[c] for c in src], np.uint16).tobytes() + charted_km.tobytes() + masks.tobytes()
                  + np.round(alpha * 255).astype(np.uint8).tobytes())
     print(f"  coastal band: {len(ci)} pixels, {len(fringe)} shore strip, {len(sources)} source cells", flush=True)
     return dict(
@@ -343,14 +346,21 @@ def _raster(cells, res, dhists):
 
 
 def export(res=2):
-    """Write web/data/{meta.json, grid.b64.txt, points.b64.txt, coast.b64.txt, land.json, raster.json}."""
+    """Write web/data/{meta.json, grid.b64.txt, points.b64.txt, coast.b64.txt, land.json, raster.json, osm.json}."""
     OUT.mkdir(parents=True, exist_ok=True)
     cells, grid, dgrid = _grid(int(res))
     (OUT / "grid.b64.txt").write_text(_pack(grid, len(cells)))
     points, pts = _points()
     (OUT / "points.b64.txt").write_text(pts)
     (OUT / "land.json").write_text(json.dumps(_land(), separators=(",", ":")))
-    raster, coast = _raster(cells, res, dgrid)
+    from . import osm
+
+    land = _land_raster()
+    surf = osm.spots(land, LAND_RES)
+    (OUT / "osm.json").write_text(json.dumps(surf, separators=(",", ":"), ensure_ascii=False))
+    charted = [(la, lo) for _, _, la, lo, _ in SPOTS] + [(la, lo) for _, la, lo in surf] + \
+        [(c[2], c[3]) for spec in regions.REGIONS.values() for c in spec["coasts"]]
+    raster, coast = _raster(cells, res, dgrid, land, charted)
     (OUT / "raster.json").write_text(json.dumps(raster, separators=(",", ":")))
     (OUT / "coast.b64.txt").write_text(coast)
     meta = dict(

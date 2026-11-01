@@ -272,11 +272,10 @@ def page(pdf, m, land, breakout_page):
              "Enclosed seas (MFWAM via Open-Meteo and Copernicus Marine; 0.75° lakes, 1.5–2° seas) use a relaxed "
              "standard: total waves 4–10 ft at a dominant period of at least 6 s.",
              fontsize=7.5, color=INK_2, va="top")
-    lakes = (f" Missing peak periods (Great Lakes, Copernicus years) are taken as {m.tp_ratio:.2f}× the mean "
-             f"period." if m.tp_ratio else "")
     fig.text(0.02, 0.011,
-             "Map colours: offshore sea state only; bathymetry, sheltering and local wind are not modelled. "
-             "Breaks and \u25c6 stretches: MFWAM (Copernicus Marine) at each break's ~8 km cell, ERA5 morning wind." + lakes,
+             "Map colours: offshore sea state only (no bathymetry, sheltering or local wind). Marked breaks and "
+             "\u25c6 stretches: either swell train at each break's ~8 km MFWAM cell (CDIP nearshore in California), "
+             f"with ERA5 morning wind \u2264 {config.MAX_WIND_KT:g} kt or offshore instead of the wind-sea test.",
              fontsize=7.5, color=INK_3, va="top")
     pdf.savefig(fig, dpi=220)
     return fig

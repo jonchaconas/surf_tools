@@ -1,5 +1,5 @@
-# Publishes the Predictive Surf Atlas (web/) to GitHub Pages whenever it changes on main.
-# One-time setup: repo Settings → Pages → Build and deployment → Source: GitHub Actions.
+# Publishes the Predictive Surf Atlas (web/) to the gh-pages branch whenever it changes on main.
+# GitHub Pages serves that branch: Settings → Pages → Deploy from a branch → gh-pages, / (root).
 name: Atlas on GitHub Pages
 
 on:
@@ -9,20 +9,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  publish:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       # web/index.html has no document skeleton (the artifact host and `surfmap gui` add one);
@@ -37,8 +32,12 @@ jobs:
             cat web/index.html
           } > _site/index.html
           touch _site/.nojekyll
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-      - id: deploy
-        uses: actions/deploy-pages@v4
+      - name: Publish to gh-pages
+        run: |
+          cd _site
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish the atlas from ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages

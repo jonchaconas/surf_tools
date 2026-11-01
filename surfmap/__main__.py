@@ -3,6 +3,7 @@
     uv run python -m surfmap fetch            # both sources (cached in data/)
     uv run python -m surfmap fetch --source inland
     uv run python -m surfmap fetch --source points   # Copernicus waves + ERA5 wind at each break
+    uv run python -m surfmap fetch --source cdip     # California nearshore waves (CDIP MOP)
     uv run python -m surfmap build            # writes predictive_surf_atlas.pdf
     uv run python -m surfmap discover         # rewrites surfmap/stretches.py
     uv run python -m surfmap gui              # the interactive atlas, locally
@@ -18,7 +19,7 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("fetch", help="download WW3 and Open-Meteo data into data/")
-    f.add_argument("--source", choices=("all", "ww3", "inland", "wind", "regions", "copernicus", "points"), default="all")
+    f.add_argument("--source", choices=("all", "ww3", "inland", "wind", "regions", "copernicus", "points", "cdip", "osm"), default="all")
     b = sub.add_parser("build", help="render one PDF page per month")
     b.add_argument("-o", "--output", default=str(config.ROOT / "predictive_surf_atlas.pdf"))
     sub.add_parser("discover", help="rewrite stretches.py: good coast far from the known breaks")
@@ -43,9 +44,15 @@ def main():
         if args.source == "copernicus":  # fills whatever Open-Meteo hasn't delivered; needs a login
             from . import cmems
             cmems.fill()
-        if args.source == "points":  # needs a Copernicus login and a CDS key
+        if args.source in ("all", "points"):  # needs a Copernicus login and a CDS key
             from . import points
             points.fetch()
+        if args.source in ("all", "cdip"):  # California nearshore waves, no login
+            from . import cdip
+            cdip.fetch()
+        if args.source in ("all", "osm"):  # OpenStreetMap surf spots, for the atlas
+            from . import osm
+            osm.fetch()
     elif args.cmd == "discover":
         from . import discover
         discover.write(discover.find())

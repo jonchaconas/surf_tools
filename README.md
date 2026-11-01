@@ -42,7 +42,7 @@ Breakout tables are listed by year-round consistency.
 [`web/index.html`](web/index.html) is an interactive version of the PDF:
 
 - **Map:** zoom and pan the world map, and switch between year-round, the half years or any
-  single month. The contours are drawn from a smooth 0.25° field that runs right up to the
+  combination of months: click a month, then more months to add them. The contours are drawn from a smooth 0.25° field that runs right up to the
   coastline.
 - **Coast that faces the right way:** within about 80 km of land, each 0.25° pixel weights every
   morning by how open it is to that morning's swell direction. Openness is the share of sight
@@ -55,7 +55,13 @@ Breakout tables are listed by year-round consistency.
   - any stretch of coast, with a compass rose showing how open it is to each direction;
   - any patch of ocean.
 
-  A click inland snaps to the nearest coast.
+  A click inland snaps to the nearest coast. Zoomed in, the 452 surf spots mapped in
+  [OpenStreetMap](https://www.openstreetmap.org) (sport=surfing, by the sea) are clickable too.
+- **Best spots and uncharted coast:** two ranked lists follow the map view when you zoom in:
+  - the marked breaks rated best by your criteria;
+  - ✶ uncharted coast: shoreline that rates well but lies at least 300 km from every named
+    break, regional coast and OpenStreetMap surf spot. The Angola–Gabon coast is the classic
+    case.
 - **Your own definition of good:** sliders for:
   - minimum swell size and period, and the long-period alternative;
   - the largest surf you want;
@@ -84,9 +90,9 @@ Run it locally, at 1° resolution, with buttons to download new data and rebuild
 uv run python -m surfmap gui
 ```
 
-`web/` is a static site. [`.github/workflows/pages.yml`](.github/workflows/pages.yml) publishes it to
+`web/` is a static site. [`.github/workflows/pages.yml`](.github/workflows/pages.yml) publishes it (to the `gh-pages` branch) at
 **https://jonchaconas.github.io/surf_tools/** whenever `web/` changes on `main`. This needs a one-time
-setting: Settings → Pages → Source: GitHub Actions.
+setting: Settings → Pages → Deploy from a branch → `gh-pages`, `/ (root)`.
 
 ## What counts as good
 
@@ -144,11 +150,13 @@ named after the nearest seaside town and written to
 | What | Source | Resolution |
 |---|---|---|
 | Open-ocean waves | NOAA WAVEWATCH III global model, University of Hawaiʻi run, via [PacIOOS ERDDAP](https://pae-paha.pacioos.hawaii.edu/erddap/griddap/ww3_global.html) | 1°, plus 0.5° over East and Southeast Asia |
-| Breaks, stretches, regional coasts | Météo-France MFWAM via [Copernicus Marine](https://marine.copernicus.eu): the global analysis from Nov 2022 and the WAVERYS reanalysis before, both swell partitions ([`surfmap/points.py`](surfmap/points.py)) | ~8 km (0.2° before Nov 2022) at each break |
+| California breaks | [CDIP MOP v1.1](https://cdip.ucsd.edu/MOP_v1.1/) nearshore model (Scripps): waves carried in to 10–15 m depth every 100 m, with island shadows, refraction and shoaling ([`surfmap/cdip.py`](surfmap/cdip.py)) | the site nearest each break |
+| Other breaks, stretches, regional coasts | Météo-France MFWAM via [Copernicus Marine](https://marine.copernicus.eu): the global analysis from Nov 2022 and the WAVERYS reanalysis before, both swell partitions ([`surfmap/points.py`](surfmap/points.py)) | ~8 km (0.2° before Nov 2022) at each break |
 | Morning wind at breaks | [ERA5](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-timeseries) 10 m wind, point time series from the Climate Data Store | 0.25°, just offshore of each break |
 | Enclosed-sea map grids | MFWAM via the [Open-Meteo Marine API](https://open-meteo.com/en/docs/marine-weather-api) and Copernicus Marine | 0.75–2° grids for the map insets |
 | Tides | [EOT20](https://www.seanoe.org/data/00683/79489/) global ocean tide model (DGFI-TUM, CC BY 4.0) | 1/8° |
 | Coastlines, towns | [Natural Earth](https://www.naturalearthdata.com) | 1:50m and 1:10m |
+| Surf spots (atlas) | [OpenStreetMap](https://www.openstreetmap.org/copyright) features tagged sport=surfing, © OpenStreetMap contributors, ODbL | points |
 
 **Seasons.** Each month uses its five most recent complete years: November–December use
 2021–2025, and January–October use 2022–2026.
@@ -179,6 +187,8 @@ uv run copernicusmarine login                       # once; stores your credenti
 
 uv run python -m surfmap fetch --source ww3         # open-ocean waves (~2 GB)
 uv run python -m surfmap fetch --source points      # waves + ERA5 wind at every break (~1-2 h)
+uv run python -m surfmap fetch --source cdip        # California nearshore waves (CDIP, no login)
+uv run python -m surfmap fetch --source osm         # OpenStreetMap surf spots for the atlas
 uv run python -m surfmap fetch --source inland      # enclosed-sea grids from Open-Meteo (free-tier quota)
 uv run python -m surfmap fetch --source copernicus  # fills anything Open-Meteo hasn't delivered
 uv run python -m surfmap discover                   # optional: re-find the under-the-radar stretches
@@ -201,7 +211,7 @@ points from the same model with no quota.
 | Module | Role |
 |---|---|
 | `config.py`, `rating.py` | Seasons, sampling hour, the good+ rule |
-| `ww3.py`, `points.py`, `inland.py`, `cmems.py`, `tides.py` | One module per data source |
+| `ww3.py`, `points.py`, `cdip.py`, `inland.py`, `cmems.py`, `tides.py`, `osm.py` | One module per data source |
 | `regions.py` | The regional pages' coasts and standards |
 | `analysis.py` | Reduces each month to counts, and sums months into periods for the maps and tables |
 | `plot.py` | Renders the pages |
@@ -219,7 +229,7 @@ points from the same model with no quota.
 ## Limitations
 
 - **Model cells, not the beach.**
-  - Breaks are read at the wave model's ~8 km cell; the map colours come from 1–2° cells.
+  - Breaks are read at the wave model's ~8 km cell (in California, CDIP's 10–15 m depth sites); the map colours come from 1–2° cells.
   - Neither resolves reefs, points, nearshore bathymetry, or the angle at which swell wraps
     into a bay. Breaks that need wrapping swell, such as Lobitos and Cabo Blanco in Peru, are
     likely underrated.

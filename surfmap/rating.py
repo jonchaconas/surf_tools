@@ -78,7 +78,5 @@ def rule_text():
         f"({config.LONG_SWELL_HEIGHT:g} m) over {config.LONG_SWELL_PERIOD:g} s; breaking under {config.MAX_BREAKER * FT:.0f} ft "
         f"(Komar–Gaughan from swell height and period), and wind-sea height "
         f"≤ {config.MAX_WINDSEA_RATIO:g}× swell height. "
-        f"Judged on one sample near {config.LOCAL_HOUR:02d}:00 local solar time. "
-        f"At the marked breaks: either swell train may qualify, and the wind-sea test is replaced by "
-        f"morning wind ≤ {config.MAX_WIND_KT:g} kt or offshore (ERA5)."
+        f"Judged on one sample near {config.LOCAL_HOUR:02d}:00 local solar time."
     )

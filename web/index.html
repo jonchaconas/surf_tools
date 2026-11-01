@@ -109,7 +109,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
         <div><strong id="hintperiod">Year-round</strong> · share of mornings that are good by your criteria</div>
         <div class="legend" id="legend"></div>
         <div class="legend-labels" id="legendlabels"></div>
-        <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast &nbsp; <span class="swatch" style="background:var(--nodata)"></span>no data · click anywhere</div>
+        <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast &nbsp; ✶ uncharted &nbsp; · surf spot (OSM) &nbsp; <span class="swatch" style="background:var(--nodata)"></span>no data · click anywhere</div>
       </div>
       <div class="loading" id="loading">Loading the model data…</div>
     </div>
@@ -143,7 +143,14 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
       <section class="block">
         <h2>Best spots <span id="toptitle" style="text-transform:none;letter-spacing:0;font-family:var(--body);font-weight:400;font-size:13px"></span></h2>
         <ol class="top" id="top"></ol>
-        <p class="note">One per 160 km of coast, from the named breaks, under-the-radar stretches and regional coasts.</p>
+        <p class="note">One per 160 km of coast, from the named breaks, under-the-radar stretches and regional coasts. Zoomed in, only those in view, and closer together.</p>
+      </section>
+
+      <section class="block">
+        <h2>Uncharted coast <span id="unchtitle" style="text-transform:none;letter-spacing:0;font-family:var(--body);font-weight:400;font-size:13px"></span></h2>
+        <label class="check" for="unch"><input type="checkbox" id="unch" checked> Mark them on the map (✶)</label>
+        <ol class="top" id="uncharted"></ol>
+        <p class="note">Shoreline that rates well by your criteria but is at least 300 km from every named break, regional coast and surf spot mapped in OpenStreetMap: the best one per 300 km. Unmapped isn't unsurfed; check access and local knowledge first.</p>
       </section>
 
       <section class="block local" id="local" hidden>
@@ -157,7 +164,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
       </section>
 
       <section class="block">
-        <p class="note" id="about">Open data: NOAA WAVEWATCH III (PacIOOS), Météo-France MFWAM (Open-Meteo, Copernicus Marine), NOAA GFS wind, EOT20 tides (DGFI-TUM), Natural Earth. Offshore sea state only: reefs, sheltering and local wind aren't modelled. Code: github.com/jonchaconas/surf_tools</p>
+        <p class="note" id="about">Open data: NOAA WAVEWATCH III (PacIOOS), Météo-France MFWAM (Open-Meteo, Copernicus Marine), NOAA GFS wind, EOT20 tides (DGFI-TUM), Natural Earth; surf spots © OpenStreetMap contributors (ODbL). Offshore sea state only: reefs, sheltering and local wind aren't modelled. Code: github.com/jonchaconas/surf_tools</p>
       </section>
     </aside>
   </main>
@@ -187,7 +194,7 @@ const PRESETS = [
 ];
 const crit = { ...PRESETS[0] };
 let period = PERIODS[0];
-let meta, land, grid, pts, coastBins, R, selected = null, transform = d3.zoomIdentity;
+let meta, land, grid, pts, coastBins, R, osm = [], selected = null, transform = d3.zoomIdentity;
 
 const colorFor = p => !isFinite(p) ? null : COLORS[Math.min(COLORS.length - 1, Math.max(0, d3.bisectRight(LEVELS, p) - 1))];
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -317,7 +324,28 @@ function recompute() {
   for (let e = 0; e < grid.n; e++) cellPct[e] = share(grid, lut.g, e, period.months);
   pointPct = new Float32Array(pts.n);
   for (let e = 0; e < pts.n; e++) pointPct[e] = pointShare(e, period.months);
-  computeField(); draw(); renderTop(); renderDetail();
+  computeField(); findUncharted(); draw(); renderTop(); renderDetail();
+}
+
+// ---------- uncharted coast: rates well by the current criteria, far from every charted spot ----------
+const UNCHARTED_KM = 300;
+let uncharted = [];
+function pixelLatLon(q) { return { lat: -90 + (Math.floor(q / R.nlon) + 0.5) * R.res, lon: -180 + ((q % R.nlon) + 0.5) * R.res }; }
+function findUncharted() {
+  const cand = [];
+  for (let c = 0; c < R.pix.length; c++) {
+    if (R.alpha[c] < 255 || R.charted[c] < UNCHARTED_KM) continue;  // the shoreline itself, far from charted spots
+    const v = F[R.pix[c]];
+    if (v >= 10) cand.push(c);
+  }
+  cand.sort((a, b) => F[R.pix[b]] - F[R.pix[a]]);
+  uncharted = [];
+  for (const c of cand) {
+    const at = pixelLatLon(R.pix[c]);
+    if (at.lat < band[0] || at.lat > band[1] || uncharted.some(u => km(u, at) < UNCHARTED_KM)) continue;
+    uncharted.push({ c, ...at, v: F[R.pix[c]] });
+    if (uncharted.length === 40) break;
+  }
 }
 
 // ---------- the field: a smooth surface on a 0.25° raster that follows the coast ----------
@@ -334,7 +362,8 @@ function setupRaster(r, cat, cbuf) {
   const n = r.coast.n, f = r.coast.fringe, N = r.nlat * r.nlon;
   R = { res: r.res, nlat: r.nlat, nlon: r.nlon, cat, basin: r.basin, sources: r.coast.sources,
     pix: new Uint32Array(cbuf, 0, n), fringe: new Uint32Array(cbuf, 4 * n, f), fringeTo: new Uint32Array(cbuf, 4 * n + 4 * f, f),
-    src: new Uint16Array(cbuf, 4 * n + 8 * f, n), open: new Uint8Array(cbuf, 6 * n + 8 * f, 16 * n), alpha: new Uint8Array(cbuf, 22 * n + 8 * f, n),
+    src: new Uint16Array(cbuf, 4 * n + 8 * f, n), charted: new Uint16Array(cbuf, 6 * n + 8 * f, n),
+    open: new Uint8Array(cbuf, 8 * n + 8 * f, 16 * n), alpha: new Uint8Array(cbuf, 24 * n + 8 * f, n),
     coastAt: new Int32Array(N).fill(-1), basinAt: new Map() };
   R.pix.forEach((p, k) => { R.coastAt[p] = k; });
   R.fringe.forEach((p, k) => { R.coastAt[p] = R.fringeTo[k]; });
@@ -462,6 +491,7 @@ function layout() {
   zoom.extent([[0, 0], [W, H]]).translateExtent(bandRect);
   if (!R) return;
   pointXY = meta.points.map(p => projection([p.lon, p.lat]));
+  for (const o of osm) o.xy = projection([o.lon, o.lat]);
   polarXY = land.polar.map(ring => ring.map(p => projection(p)));
   fieldKey = "";
   draw();
@@ -527,6 +557,25 @@ function draw() {
     ctx.fillStyle = css("--land"); ctx.fill();
     ctx.strokeStyle = css("--coast"); ctx.lineWidth = 0.6 / k; ctx.stroke();
   }
+  if (osm.length && k >= 2.5) {  // OpenStreetMap surf spots, once there's room
+    ctx.fillStyle = css("--ink"); ctx.globalAlpha = 0.7;
+    for (const o of osm) { const xy = o.xy; if (!xy) continue; ctx.beginPath(); ctx.arc(xy[0], xy[1], 1.8 / k, 0, 2 * Math.PI); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    if (k >= 12) {
+      ctx.font = `400 ${10 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = css("--muted");
+      ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
+      for (const o of osm) { if (!o.xy) continue; ctx.strokeText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); ctx.fillText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); }
+    }
+  }
+  if (document.getElementById("unch").checked) {  // uncharted picks as stars
+    const r = Math.max(4, Math.min(8, 3.5 + k * 0.6)) / k;
+    uncharted.slice(0, 10).forEach((u, n) => {
+      const xy = projection([u.lon, u.lat]); if (!xy) return;
+      ctx.beginPath();
+      for (let q = 0; q < 10; q++) { const a = (q * Math.PI) / 5 - Math.PI / 2, rr = q % 2 ? r * 0.45 : r; ctx.lineTo(xy[0] + rr * Math.cos(a), xy[1] + rr * Math.sin(a)); }
+      ctx.closePath(); ctx.fillStyle = colorFor(u.v); ctx.fill(); ctx.lineWidth = 1.2 / k; ctx.strokeStyle = css("--ink"); ctx.stroke();
+    });
+  }
   if (pointPct) {
     const ink = css("--ink"), r = Math.max(2.6, Math.min(6, 2.2 + k * 0.5)) / k;
     meta.points.forEach((p, i) => {
@@ -564,7 +613,7 @@ function constrain(t, view, [[bx0, by0], [bx1, by1]]) {
 }
 const zoom = d3.zoom().scaleExtent([1, 80]).constrain(constrain).on("zoom", e => {
   transform = e.transform; moving = true; draw();
-  clearTimeout(settle); settle = setTimeout(() => { moving = false; draw(); }, 160);  // full resolution once still
+  clearTimeout(settle); settle = setTimeout(() => { moving = false; draw(); renderTop(); }, 160);  // full resolution once still
 });
 d3.select(canvas).call(zoom).on("dblclick.zoom", null);
 document.getElementById("zin").onclick = () => d3.select(canvas).transition().duration(250).call(zoom.scaleBy, 2);
@@ -582,6 +631,11 @@ canvas.addEventListener("click", ev => {
   let best = -1, bestD = (12 / transform.k) ** 2;
   pointXY.forEach((xy, i) => { if (!xy) return; const d = (xy[0] - x) ** 2 + (xy[1] - y) ** 2; if (d < bestD) { bestD = d; best = i; } });
   if (best >= 0) { select({ type: "point", i: best }); return; }
+  if (transform.k >= 2.5) {
+    let o = null, od = (8 / transform.k) ** 2;
+    for (const s of osm) { if (!s.xy) continue; const d = (s.xy[0] - x) ** 2 + (s.xy[1] - y) ** 2; if (d < od) { od = d; o = s; } }
+    if (o) { const at = locate(o.lon, o.lat); select({ ...at, name: o.name, osm: true, lat: o.lat, lon: o.lon }); return; }
+  }
   const lon = lonAt(x), lat = latAt(y);
   select(Math.abs(lon) <= 180 && lat >= band[0] && lat <= band[1] ? locate(lon, lat) : null);
 });
@@ -731,9 +785,10 @@ function renderDetail() {
     const c = selected.c, s = R.src[c], cell = R.sources[s], open = R.open.subarray(c * 16, c * 16 + 16);
     const pass = code => open[code & 15] >= 128 && lut.g[code >> 4];
     const la = meta.cells.lat[cell], lo = meta.cells.lon[cell], near = nearestPoint(selected.lat, selected.lon, 60);
-    title = near ? `Coast near ${near.p.name}` : latlon(selected.lat, selected.lon, 2);
-    sub = `${near ? latlon(selected.lat, selected.lon, 2) + " · " : ""}${selected.snapped ? "nearest coast to where you clicked" : "this stretch of shore"}`;
-    badge = "Coastline";
+    title = selected.name || (near ? `Coast near ${near.p.name}` : latlon(selected.lat, selected.lon, 2));
+    sub = `${selected.name || near ? latlon(selected.lat, selected.lon, 2) + " · " : ""}${selected.snapped ? "nearest coast to where you clicked" : "this stretch of shore"}` +
+      (R.charted[c] >= UNCHARTED_KM ? ` · ${R.charted[c].toLocaleString()} km from the nearest charted spot` : "");
+    badge = selected.osm ? "Surf spot · OpenStreetMap" : selected.unchartedRank ? `Uncharted coast ✶${selected.unchartedRank}` : "Coastline";
     const a = R.alpha[c] / 255, mix = (v, w) => !isFinite(w) ? v : !isFinite(v) ? w : a * v + (1 - a) * w;  // as on the map
     pct = mix(coastShare(c, period.months), blend(selected.under, x => cellPct[x]));
     shares = MONTHS.map((_, m) => mix(coastShare(c, [m + 1]), blend(selected.under, x => share(grid, lut.g, x, [m + 1]))));
@@ -744,8 +799,8 @@ function renderDetail() {
       `<dt>Measured on</dt><dd>${meta.cells.enclosed[cell] ? "total waves" : "swell"}</dd>`;
   } else {
     const wts = selected.weights, main = wts.length ? wts.reduce((a, b) => (b[1] > a[1] ? b : a))[0] : -1;
-    title = latlon(selected.lat, selected.lon, 2);
-    badge = selected.enclosed ? "Enclosed sea" : "Open ocean";
+    title = selected.name || latlon(selected.lat, selected.lon, 2);
+    badge = selected.osm ? "Surf spot · OpenStreetMap" : selected.enclosed ? "Enclosed sea" : "Open ocean";
     sub = selected.enclosed ? `Blended from the ${wts.length} nearest model points` : `Interpolated from ${wts.length === 1 ? "the nearest" : wts.length + " nearby"} ${meta.res}° model cell${wts.length === 1 ? "" : "s"}`;
     pct = blend(wts, c => cellPct[c]); shares = MONTHS.map((_, m) => blend(wts, c => share(grid, lut.g, c, [m + 1])));
     typ = main >= 0 ? typical(grid, main, period.months, code => lut.g[code], code => code) : "–";
@@ -761,14 +816,37 @@ function km(a, b) {
   const h = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLo / 2) ** 2;
   return 12742 * Math.asin(Math.sqrt(h));
 }
-function renderTop() {
-  const order = meta.points.map((p, i) => i).filter(i => isFinite(pointPct[i])).sort((a, b) => pointPct[b] - pointPct[a]);
-  const chosen = [];
-  for (const i of order) { if (chosen.every(j => km(meta.points[i], meta.points[j]) >= 160)) chosen.push(i); if (chosen.length === 20) break; }
-  document.getElementById("toptitle").textContent = `· ${period.label}`;
-  document.getElementById("top").innerHTML = chosen.map((i, n) => { const p = meta.points[i];
-    return `<li><button data-i="${i}"><span class="rank">${n + 1}</span><span class="nm"><span class="swatch" style="background:${colorFor(pointPct[i])}"></span>${p.name}<span class="rg">${p.region}</span></span><span class="pc">${Math.round(pointPct[i])}%</span></button></li>`; }).join("");
+function inView(lat, lon) {  // everywhere at the whole-world view; zoomed in, just what's on screen
+  if (transform.k < 1.5) return true;
+  const xy = projection([lon, lat]); if (!xy) return false;
+  const [x, y] = transform.apply(xy);
+  return x >= 0 && x <= W && y >= 0 && y <= H;
 }
+function renderTop() {
+  if (!pointPct) return;
+  const zoomed = transform.k >= 1.5, scope = `${period.label}${zoomed ? " · in view" : ""}`;
+  const order = meta.points.map((p, i) => i).filter(i => isFinite(pointPct[i]) && inView(meta.points[i].lat, meta.points[i].lon))
+    .sort((a, b) => pointPct[b] - pointPct[a]);
+  const sep = zoomed ? Math.min(160, 600 / transform.k) : 160;  // closer together as you zoom in
+  const chosen = [];
+  for (const i of order) { if (chosen.every(j => km(meta.points[i], meta.points[j]) >= sep)) chosen.push(i); if (chosen.length === 20) break; }
+  document.getElementById("toptitle").textContent = `· ${scope}`;
+  document.getElementById("top").innerHTML = chosen.length ? chosen.map((i, n) => { const p = meta.points[i];
+    return `<li><button data-i="${i}"><span class="rank">${n + 1}</span><span class="nm"><span class="swatch" style="background:${colorFor(pointPct[i])}"></span>${p.name}<span class="rg">${p.region}</span></span><span class="pc">${Math.round(pointPct[i])}%</span></button></li>`; }).join("")
+    : `<li class="detail-empty">No marked spots in view.</li>`;
+  const unch = uncharted.filter(u => inView(u.lat, u.lon)).slice(0, 10);
+  document.getElementById("unchtitle").textContent = `· ${scope}`;
+  document.getElementById("uncharted").innerHTML = unch.length ? unch.map((u, n) => {
+    const near = nearestPoint(u.lat, u.lon, 1e9);
+    return `<li><button data-u="${uncharted.indexOf(u)}"><span class="rank">✶${uncharted.indexOf(u) + 1}</span><span class="nm"><span class="swatch" style="background:${colorFor(u.v)}"></span>${latlon(u.lat, u.lon)}<span class="rg">${Math.round(R.charted[u.c]).toLocaleString()} km from charted surf${near ? " · nearest marked: " + near.p.name : ""}</span></span><span class="pc">${Math.round(u.v)}%</span></button></li>`; }).join("")
+    : `<li class="detail-empty">None in view by these criteria.</li>`;
+}
+document.getElementById("uncharted").addEventListener("click", e => {
+  const b = e.target.closest("button[data-u]"); if (!b) return;
+  const n = +b.dataset.u, u = uncharted[n], q = R.pix[u.c];
+  select({ type: "coast", c: u.c, under: seaWeights(q, u.lon, u.lat), lat: u.lat, lon: u.lon, unchartedRank: n + 1 }); zoomTo(u.lon, u.lat, 10);
+});
+document.getElementById("unch").onchange = () => draw();
 document.getElementById("top").addEventListener("click", e => {
   const b = e.target.closest("button[data-i]"); if (!b) return;
   const i = +b.dataset.i, p = meta.points[i]; select({ type: "point", i }); zoomTo(p.lon, p.lat);
@@ -791,20 +869,51 @@ function changed() { presetSel.value = "custom"; clearTimeout(pending); pending 
 ids.forEach(id => document.getElementById(id).addEventListener("input", e => { crit[id] = +e.target.value; document.getElementById(id + "v").textContent = fmt[id](crit[id]); changed(); }));
 document.getElementById("longon").onchange = e => { crit.longOn = e.target.checked; document.getElementById("longbox").hidden = !crit.longOn; changed(); };
 
-const periodsEl = document.getElementById("periods");
-periodsEl.innerHTML = PERIODS.map(p => `<button class="chip" data-id="${p.id}" aria-pressed="${p === period}">${p.label}</button>`).join("");
-periodsEl.addEventListener("click", e => {
-  const b = e.target.closest("button[data-id]"); if (!b) return;
-  period = PERIODS.find(p => p.id === b.dataset.id);
-  periodsEl.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", c.dataset.id === period.id));
+// Periods: a group chip selects its months; month chips then combine (click to add or drop a month).
+const GROUPS = PERIODS.slice(0, 3);
+let picked = new Set(GROUPS[0].months), fromGroup = true;
+function monthsLabel(ms) {  // "Jun–Aug" for a run of months (also across the new year), else "Jan, Mar, Jul"
+  if (ms.length === 1) return MONTHS[ms[0] - 1];
+  const set = new Set(ms);
+  for (const s of ms) {
+    if (set.has(((s + 10) % 12) + 1)) continue;  // not the start of a run
+    let n = 0; while (n < 12 && set.has(((s - 1 + n) % 12) + 1)) n++;
+    if (n === ms.length) return `${MONTHS[s - 1]}–${MONTHS[(s - 2 + n) % 12]}`;
+  }
+  return ms.map(m => MONTHS[m - 1]).join(", ");
+}
+function setPeriod() {
+  const ms = [...picked].sort((a, b) => a - b);
+  const group = GROUPS.find(g => g.months.length === ms.length && g.months.every(m => picked.has(m)));
+  period = { months: ms, label: group ? group.label : monthsLabel(ms) };
+  periodsEl.querySelectorAll(".chip").forEach(c => {
+    const g = GROUPS.find(x => x.id === c.dataset.id);
+    c.setAttribute("aria-pressed", g ? g === group : !fromGroup && picked.has(+c.dataset.m));
+  });
   document.getElementById("hintperiod").textContent = period.label;
-  recompute();
+}
+const periodsEl = document.getElementById("periods");
+periodsEl.innerHTML = GROUPS.map(p => `<button class="chip" data-id="${p.id}">${p.label}</button>`).join("") +
+  MONTHS.map((m, i) => `<button class="chip" data-m="${i + 1}" title="Click more months to combine them">${m}</button>`).join("");
+periodsEl.addEventListener("click", e => {
+  const b = e.target.closest("button.chip"); if (!b) return;
+  if (b.dataset.id) { picked = new Set(GROUPS.find(g => g.id === b.dataset.id).months); fromGroup = true; }
+  else {
+    const m = +b.dataset.m;
+    if (fromGroup) picked = new Set([m]);
+    else if (picked.has(m)) { if (picked.size > 1) picked.delete(m); }
+    else picked.add(m);
+    fromGroup = false;
+  }
+  setPeriod(); recompute();
 });
+setPeriod();
 document.getElementById("legend").innerHTML = COLORS.map(c => `<span style="background:${c}"></span>`).join("");
 document.getElementById("legendlabels").innerHTML = ["0%", "15%", "40%", "100%"].map(t => `<span>${t}</span>`).join("");
 
 // ---------- local tools (only when served by `python -m surfmap gui`) ----------
 async function localTools() {
+  if (!["localhost", "127.0.0.1"].includes(location.hostname)) return;
   try { const r = await fetch("api/ping"); if (!r.ok) return; await r.json(); } catch { return; }
   const box = document.getElementById("local"), log = document.getElementById("log"); box.hidden = false;
   let timer;
@@ -826,9 +935,10 @@ async function localTools() {
   syncControls();
   try {
     meta = await json("data/meta.json");
-    document.getElementById("loading").textContent = "Loading the model data (about 18 MB)…";
-    const [g, p, c, l, r] = await Promise.all([bytes("data/grid.b64.txt"), bytes("data/points.b64.txt"), bytes("data/coast.b64.txt"),
-      json("data/land.json"), json("data/raster.json")]);
+    document.getElementById("loading").textContent = "Loading the model data (about 25 MB)…";
+    const [g, p, c, l, r, o] = await Promise.all([bytes("data/grid.b64.txt"), bytes("data/points.b64.txt"), bytes("data/coast.b64.txt"),
+      json("data/land.json"), json("data/raster.json"), json("data/osm.json").catch(() => [])]);
+    osm = o.map(([name, lat, lon]) => ({ name, lat, lon }));
     grid = unpack(g, meta.cells.lat.length); pts = unpackPoints(p, meta.points.length, meta.morning.length); coastBins = unpack(c, r.coast.sources.length); land = splitLand(l);
     setupRaster(r, new Uint8Array(await inflate(r.cat)), await inflate(r.coast.data));
     document.getElementById("about").textContent += ` · data as of ${meta.generated}; ${meta.res}° ocean grid, coast at ${r.res}°`;

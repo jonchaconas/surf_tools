@@ -9,8 +9,8 @@ The atlas is `web/index.html` plus `web/data/`. It is published in two places:
 
 - a private claude.ai artifact, https://claude.ai/artifact/5Wa8fpAjfn87AZdXgummjP — keep this
   URL; never publish a new artifact for it;
-- GitHub Pages, https://jonchaconas.github.io/surf_tools/, deployed by
-  `.github/workflows/pages.yml` on every push that touches `web/`.
+- GitHub Pages, https://jonchaconas.github.io/surf_tools/, served from the `gh-pages` branch
+  that `.github/workflows/pages.yml` rebuilds on every push that touches `web/`.
 
 ## 1. Export
 
@@ -55,9 +55,10 @@ so a page-only change needs only `file_path`.
 
 ## 4. Commit and push
 
-Commit `web/` together with the code that produced it, then push. If the Pages workflow fails
-with "Ensure GitHub Pages has been enabled", the user must set Settings → Pages → Source:
-GitHub Actions. The workflow itself is fine.
+Commit `web/` together with the code that produced it, then push. The workflow rebuilds the
+`gh-pages` branch, which GitHub Pages serves. If https://jonchaconas.github.io/surf_tools/
+returns 404 after a successful run, Pages isn't pointed at that branch. The user must set
+Settings → Pages → Deploy from a branch → `gh-pages`, `/ (root)`.
 
 ## Page constraints (artifact host)
 

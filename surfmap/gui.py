@@ -27,7 +27,7 @@ class _Jobs:
     def steps(self, name):
         py = [sys.executable, "-m", "surfmap"]
         return {
-            "fetch": [py + ["fetch", "--source", s] for s in ("ww3", "points", "copernicus")],
+            "fetch": [py + ["fetch", "--source", s] for s in ("ww3", "points", "cdip", "osm", "copernicus")],
             "build": [py + ["build"]],
             "export": [py + ["export", "--res", str(self.res)]],
         }[name]
