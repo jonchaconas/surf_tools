@@ -1079,6 +1079,10 @@ function palette() {  // 0.1% steps -> packed RGBA, for writing the field straig
   fieldKey = "";
 }
 function layout() {
+  // A resize (rotating a tablet) re-fits the projection; keep the same place in the middle at the
+  // same scale on screen, rather than the old pixel offsets, which would point somewhere else.
+  const was = projection && W && transform.k > 1.01 ? { s: projection.scale(), k: transform.k,
+    lon: lonAt((W / 2 - transform.x) / transform.k), lat: latAt((H / 2 - transform.y) / transform.k) } : null;
   const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
   W = r.width; H = r.height;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
@@ -1089,6 +1093,10 @@ function layout() {
   worldW = 2 * Math.PI * s;
   path = d3.geoPath(projection, ctx);
   zoom.extent([[0, 0], [W, H]]).translateExtent(bandRect);
+  if (was) {
+    const k = Math.max(1, (was.k * was.s) / projection.scale()), xy = projection([((was.lon + 540) % 360) - 180, was.lat]);
+    d3.select(canvas).call(zoom.transform, d3.zoomIdentity.translate(W / 2, H / 2).scale(k).translate(-xy[0], -xy[1]));
+  }
   if (!R) return;
   pointXY = meta.points.map(p => projection([p.lon, p.lat]));
   for (const b of liveBuoys) b.xy = projection([b.lon, b.lat]);
