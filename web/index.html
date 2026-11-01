@@ -1157,7 +1157,7 @@ function loadChart() {  // once; null if there's no chart yet
   return chartLoading;
 }
 const CIRCULAR = new Set(["dir", "wind_from"]);
-function between(t, key, make, frame) {  // a field between frames (t fractional): blended, or the nearest frame's for a direction
+function between(t, key, frame) {  // a field between frames (t fractional): blended, or the nearest frame's for a direction
   const c = swellChart;
   if (c.between.has(key)) return c.between.get(key);
   const name = key.split(":").pop(), k = Math.floor(t), f = t - k;
@@ -1310,7 +1310,7 @@ async function setMapMode(mode) {
     if (!(await loadChart())) { document.getElementById("fcwhat").textContent = "not available yet"; return; }
     const now = Date.now(), el = document.getElementById("fcstep");
     el.max = (swellChart.t.length - 1) * swellChart.stepH; el.step = swellChart.stepH;  // the model's own steps
-    if (!fcStep) fcStep = Math.max(0, Math.min(swellChart.t.length - 1, Math.round((now - swellChart.t[0]) / 3600e3) / swellChart.stepH));
+    if (!fcStep) fcStep = Math.max(0, Math.min(swellChart.t.length - 1, Math.round((now - swellChart.t[0]) / (swellChart.stepH * 3600e3))));
     fcPalette(); computeChartField(); showFcStep();
   }
   renderLegend(); fieldKey = ""; draw(); saveState();

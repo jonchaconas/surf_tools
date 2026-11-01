@@ -275,9 +275,12 @@ class Period:
             cols = (LON > lo0) & (LON < lo1)
             la, lo = np.meshgrid(LAT[rows], LON[cols], indexing="ij")
             inside = contains_xy(geoms[name], lo, la)
+            if not ok.any():  # frozen over all month (Hudson Bay in winter)
+                continue
             pts = (parts[0]["lat"][ok], parts[0]["lon"][ok])
-            lin = griddata(pts, p[ok], (la[inside], lo[inside]), method="linear")
             near = griddata(pts, p[ok], (la[inside], lo[inside]), method="nearest")
+            # a triangulation needs four points; a nearly frozen basin may have fewer
+            lin = griddata(pts, p[ok], (la[inside], lo[inside]), method="linear") if ok.sum() >= 4 else near
             sub = grid[np.ix_(rows, cols)]
             sub[inside] = np.where(np.isnan(lin), near, lin)
             grid[np.ix_(rows, cols)] = sub

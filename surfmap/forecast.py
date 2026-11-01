@@ -1,7 +1,8 @@
 """The coming week's mornings at every marked break, in the shape of the climate data, so the atlas
 judges each one by the viewer's own criteria.
 
-Waves: CDIP MOP's nearshore forecast in California; elsewhere Copernicus Marine's MFWAM forecast at
+Waves: NOAA's Great Lakes wave model (GLWU, 2.5 km) on the Great Lakes; CDIP MOP's nearshore forecast in
+California; elsewhere Copernicus Marine's MFWAM forecast at
 the break's own ~8 km cell (the same model and cell as the ten-year record) when a Copernicus login is
 available, else Open-Meteo's marine forecast. Wind: Open-Meteo's 10 m wind and gusts just offshore.
 Tide is left to the page, which has each break's tide constituents. Each day is sampled at every
@@ -26,6 +27,7 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 
 import numpy as np
 import requests
@@ -41,6 +43,8 @@ BATCH = 50  # locations per Open-Meteo request
 PACE = 6     # seconds between Open-Meteo requests: each location counts, and the free tier allows 600 a minute
 COASTWATCH = "https://coastwatch.pfeg.noaa.gov/erddap/griddap"
 GLERL = "https://apps.glerl.noaa.gov/erddap/griddap"
+GLWU = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/glwu/prod"  # NOAA's Great Lakes wave model, GRIB2
+GLWU_FIELDS = {"HTSGW": "hs", "PERPW": "tp", "DIRPW": "dir", "WIND": "kt", "WDIR": "wind_from"}
 CHART_STEP_H = 3  # GFS's own step; WAVEWATCH III is hourly
 CHART_FIELDS = [("hs", 0.1), ("tp", 0.1), ("dir", 2), ("kt", 0.5), ("wind_from", 2)]  # name, units per byte step
 MAP_JSON, MAP_DATA = OUT.parent / "fcmap.json", OUT.parent / "fcmap.b64.txt"
@@ -169,7 +173,9 @@ def _wind(pts):
 
 def build():
     pts = json.loads(META.read_text())["points"]
-    waves, sources = {}, {"cdip": 0, "copernicus": 0, "open-meteo": 0, "swell chart": 0}
+    waves, sources = {}, {"glwu": 0, "cdip": 0, "copernicus": 0, "open-meteo": 0, "swell chart": 0}
+    waves.update(_glwu_rows(pts))  # the Great Lakes' own model first
+    sources["glwu"] = len(waves)
 
     def one(p):
         try:
@@ -181,7 +187,7 @@ def build():
             return key(p), None, None
 
     with ThreadPoolExecutor(6) as pool:
-        for k, src, rows in pool.map(one, pts):
+        for k, src, rows in pool.map(one, [p for p in pts if key(p) not in waves]):
             if rows:
                 waves[k] = rows
                 sources[src] += 1
@@ -287,32 +293,141 @@ def chart():
 
 
 def _chart_basins(times):
-    """Open-Meteo's waves at the map's enclosed-sea points at the chart's times (see chart())."""
+    """Waves at the map's enclosed-sea points at the chart's times (see chart()): GLWU on the Great
+    Lakes, Open-Meteo's marine forecast elsewhere. None if neither has anything."""
     import base64
     import gzip
 
-    from .points import corrected, correction, sea_tp
+    from .points import corrected, correction, lake_of, sea_tp
 
     cells = json.loads(META.read_text())["cells"]
     idx = [k for k, e in enumerate(cells["enclosed"]) if e]
     at = [(cells["lat"][k], cells["lon"][k]) for k in idx]
     want = np.asarray(times, dtype="datetime64[m]")
     cube = np.full((len(want), 3, len(idx)), 255, np.uint8)
-    for n, h in enumerate(_open_meteo(MARINE, at, ["wave_height", "wave_period", "wave_direction"])):
-        if not h:
-            continue
-        t = np.array(h["time"], dtype="datetime64[m]")
-        pos = np.minimum(np.searchsorted(t, want), len(t) - 1)
-        hit = t[pos] == want
-        hs, tm, d = (np.array([np.nan if v is None else v for v in h[k]], float)[pos] for k in ("wave_height", "wave_period", "wave_direction"))
-        qm = correction(*at[n])
-        if qm is not None:
-            hs = corrected(hs, qm)
-        for f, (v, step) in enumerate([(hs, 0.1), (sea_tp(tm, True), 0.1), (d % 360, 2)]):
+
+    def put(n, hit, hs, tp, d):
+        for f, (v, step) in enumerate([(hs, 0.1), (tp, 0.1), (d % 360, 2)]):
             ok = hit & np.isfinite(v)
             cube[ok, f, n] = np.clip(np.round(v[ok] / step), 0, 254)
-    print(f"  enclosed seas: {len(idx)} points", flush=True)
-    return dict(cells=idx, data=base64.b64encode(gzip.compress(cube.tobytes(), 9)).decode())
+
+    try:
+        for n, h in enumerate(_open_meteo(MARINE, at, ["wave_height", "wave_period", "wave_direction"])):
+            if not h:
+                continue
+            t = np.array(h["time"], dtype="datetime64[m]")
+            pos = np.minimum(np.searchsorted(t, want), len(t) - 1)
+            hs, tm, d = (np.array([np.nan if v is None else v for v in h[k]], float)[pos] for k in ("wave_height", "wave_period", "wave_direction"))
+            qm = correction(*at[n])
+            put(n, t[pos] == want, corrected(hs, qm) if qm is not None else hs, sea_tp(tm, True), d)
+    except Exception as e:  # out of quota: the Great Lakes still come from GLWU below
+        print(f"  Open-Meteo enclosed seas failed: {type(e).__name__}: {str(e)[:100]}", flush=True)
+    g = _glwu()
+    lakes = [n for n, (la, lo) in enumerate(at) if lake_of(la, lo)]
+    if g is not None and lakes:
+        pos = np.minimum(np.searchsorted(g["times"], want), len(g["times"]) - 1)
+        hit = g["times"][pos] == want
+        for n in lakes:
+            k = _glwu_point(g, *at[n])
+            if k is not None:
+                put(n, hit, g["hs"][pos, k], g["tp"][pos, k], g["dir"][pos, k])
+    filled = (cube != 255).any()
+    print(f"  enclosed seas: {len(idx)} points, {'some' if filled else 'none'} filled", flush=True)
+    return dict(cells=idx, data=base64.b64encode(gzip.compress(cube.tobytes(), 9)).decode()) if filled else None
+
+
+@lru_cache(maxsize=1)
+def _glwu():
+    """NOAA's Great Lakes wave model (GLWU, 2.5 km), its latest run at the chart's steps (CHART_STEP_H
+    hours, on the UTC clock): dict(times, lat, lon of its water points, then hs, tp, dir, kt and
+    wind_from as [time, point]), or None. Only those fields' bytes are fetched, using the run's index."""
+    import re
+    import tempfile
+
+    import eccodes
+
+    from .points import KT
+
+    s = requests.Session()
+    s.headers["User-Agent"] = "surf_tools (https://github.com/jonchaconas/surf_tools)"
+    try:
+        days = sorted(set(re.findall(r"glwu\.(\d{8})/", s.get(f"{GLWU}/", timeout=60).text)), reverse=True)
+        for day in days:
+            cycles = re.findall(r"glwu\.grlc_2p5km\.t(\d{2})z\.grib2\.idx", s.get(f"{GLWU}/glwu.{day}/", timeout=60).text)
+            if cycles:
+                cycle = max(cycles)
+                break
+        else:
+            return None
+        url = f"{GLWU}/glwu.{day}/glwu.grlc_2p5km.t{cycle}z.grib2"
+        idx = [line.split(":") for line in s.get(url + ".idx", timeout=60).text.splitlines()]
+        step = lambda text: 0 if text == "anl" else int(text.split()[0]) if text.endswith("hour fcst") else None
+        want = [k for k, e in enumerate(idx) if e[3] in GLWU_FIELDS and step(e[5]) is not None
+                and (int(cycle) + step(e[5])) % CHART_STEP_H == 0]
+        runs = []  # consecutive messages in one request
+        for k in want:
+            if runs and runs[-1][1] == k - 1:
+                runs[-1][1] = k
+            else:
+                runs.append([k, k])
+        fields, lat, lon = {}, None, None
+        with tempfile.TemporaryFile() as f:
+            for a, b in runs:
+                end = int(idx[b + 1][1]) - 1 if b + 1 < len(idx) else ""
+                r = s.get(url, headers={"Range": f"bytes={idx[a][1]}-{end}"}, timeout=120)
+                r.raise_for_status()
+                f.write(r.content)
+            f.seek(0)
+            for k in want:
+                h = eccodes.codes_grib_new_from_file(f)
+                try:
+                    if lat is None:
+                        lat, lon = eccodes.codes_get_array(h, "latitudes"), eccodes.codes_get_array(h, "longitudes")
+                    v = eccodes.codes_get_values(h)
+                    v = np.where(v == eccodes.codes_get(h, "missingValue"), np.nan, v)
+                finally:
+                    eccodes.codes_release(h)
+                fields.setdefault(GLWU_FIELDS[idx[k][3]], {})[step(idx[k][5])] = v
+    except Exception as e:
+        print(f"  GLWU failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
+        return None
+    hours = sorted(fields["hs"])
+    water = np.isfinite(np.stack([fields["hs"][hr] for hr in hours])).any(axis=0)
+    t0 = np.datetime64(f"{day[:4]}-{day[4:6]}-{day[6:]}T{cycle}:00")
+    out = dict(times=np.array([t0 + np.timedelta64(hr, "h") for hr in hours], dtype="datetime64[m]"),
+               lat=lat[water], lon=((lon[water] + 180) % 360) - 180)
+    for name in GLWU_FIELDS.values():
+        out[name] = np.stack([fields[name][hr][water] for hr in hours]) * (KT if name == "kt" else 1)
+    print(f"  GLWU run {day} {cycle}z: {len(hours)} steps at {water.sum()} water points", flush=True)
+    return out
+
+
+def _glwu_point(g, lat, lon, reach=0.15):
+    """Index of GLWU's nearest water point within reach degrees, or None."""
+    d = np.hypot(g["lat"] - lat, (g["lon"] - lon) * np.cos(np.radians(lat)))
+    k = int(np.argmin(d))
+    return k if d[k] <= reach else None
+
+
+def _glwu_rows(pts):
+    """{key: rows} of GLWU's waves (one train: the whole sea, peak period) at the Great Lakes breaks."""
+    from .points import lake_of
+
+    g = _glwu()
+    out = {}
+    if g is None:
+        return out
+    hours = (g["times"][1] - g["times"][0]) / np.timedelta64(1, "h")
+    for p in pts:
+        if not lake_of(p["lat"], p["lon"]):
+            continue
+        k = _glwu_point(g, p["lat"], p["lon"])
+        if k is None:
+            continue
+        hs, tp, d = g["hs"][:, k], g["tp"][:, k], g["dir"][:, k]
+        nan = np.full(len(hs), np.nan)
+        out[key(p)] = _rows(g["times"], p["lon"], [hs, tp, d, nan, nan, nan, hs, tp, d], hours)
+    return out
 
 
 def water(pts):
