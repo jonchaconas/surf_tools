@@ -17,7 +17,7 @@ from shapely import contains_xy
 from shapely.geometry import Point
 from shapely.ops import unary_union
 
-from . import config, inland, rating, regions, wind, ww3
+from . import config, inland, points, rating, regions, ww3
 from .spots import SPOTS
 from .stretches import STRETCHES
 
@@ -291,26 +291,24 @@ class Period:
         return np.clip(_fill_nearest(grid), 0, 100), nodata
 
     def spots(self):
-        """Per named break: % of mornings that are good+ AND arrive from the break's swell window."""
+        """Per named break: % of mornings good+ at the break itself (points.py: MFWAM at its ~8 km
+        cell, either swell train inside its window, ERA5 morning wind); enclosed-sea breaks by
+        the relaxed standard. Breaks still downloading are left out."""
         rows = []
-        for name, region, lat, lon, _ in SPOTS:
+        for name, region, lat, lon, facing in SPOTS:
             basin = _basin_of(lat, lon)
-            per = [c.spots.get(name) for c in self.counts]
-            if (basin and basin not in self.ready) or None in per:
-                continue
-            rows.append(dict(name=name, region=region, lat=lat, lon=lon, basin=basin, **_merge(per),
-                             wind=wind.typical(name, self.months)))
+            s = points.summary(lat, lon, facing, self.months, relaxed=bool(basin))
+            if s is not None:
+                rows.append(dict(name=name, region=region, lat=lat, lon=lon, basin=basin, **s))
         return sorted(rows, key=lambda r: -r["pct"])
 
     def stretches(self):
-        """Per discovered stretch, numbered as in stretches.py: % good+ and its median good morning."""
+        """Per discovered stretch, numbered as in stretches.py: % good+ at its coast and its median good morning."""
         rows = []
-        for num, (name, region, lat, lon, _, _) in enumerate(STRETCHES, 1):
-            per = [c.stretches.get(name) for c in self.counts]
-            if None in per:
-                continue
-            rows.append(dict(num=num, name=name, region=region, lat=lat, lon=lon, **_merge(per),
-                             wind=wind.typical(name, self.months)))
+        for num, (name, region, lat, lon, facing, _) in enumerate(STRETCHES, 1):
+            s = points.summary(lat, lon, facing, self.months)
+            if s is not None:
+                rows.append(dict(num=num, name=name, region=region, lat=lat, lon=lon, **s))
         return rows
 
     def swell_arrows(self, step=10, min_consistency=0.3):

@@ -1,4 +1,4 @@
-# Publishes the Surf Climate Atlas (web/) to GitHub Pages whenever it changes on main.
+# Publishes the Predictive Surf Atlas (web/) to GitHub Pages whenever it changes on main.
 # One-time setup: repo Settings → Pages → Build and deployment → Source: GitHub Actions.
 name: Atlas on GitHub Pages
 

@@ -1,4 +1,4 @@
-<title>Surf Climate Atlas</title>
+<title>Predictive Surf Atlas</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -98,7 +98,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
 
 <div class="app">
   <header>
-    <h1>Surf Climate Atlas<small>how often the surf is good, from five years of wave-model mornings</small></h1>
+    <h1>Predictive Surf Atlas<small>how often the surf is good, from five years of wave-model mornings</small></h1>
     <div class="periods" role="group" aria-label="Period" id="periods"></div>
   </header>
   <main>
@@ -132,24 +132,12 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
           <label class="row" for="t2">with a period of at least <span class="val" id="t2v"></span><input type="range" id="t2" min="10" max="20" step="1"></label>
         </div>
         <label class="row" for="maxb">Breaking no bigger than <span class="val" id="maxbv"></span><input type="range" id="maxb" min="4" max="41" step="1"></label>
-        <label class="row" for="clean">Wind chop allowed
-          <select id="clean" style="grid-column: 1 / -1">
-            <option value="0">Glassy: chop under 0.2× the swell</option>
-            <option value="1">Clean: under 0.35× the swell</option>
-            <option value="2">Fair: under 0.5× the swell</option>
-            <option value="3">Bumpy: under 0.75× the swell</option>
-            <option value="4">Choppy: under the swell's height</option>
-            <option value="5">Any</option>
-          </select>
-        </label>
-        <label class="row" for="expo">Breaks: swell within this angle of the way they face
-          <select id="expo" style="grid-column: 1 / -1">
-            <option value="0">±30°</option><option value="1">±45°</option><option value="2">±60°</option>
-            <option value="3">±75°</option><option value="4">±90°</option><option value="5">Any direction</option>
-          </select>
-        </label>
-        <p class="note">Along the coast, each morning counts by how open the shore is to that morning's swell direction: the share of sight lines from that direction with 200 km of open water (100 km in lakes and enclosed seas). Bays and headlands block what they face; islands under 1,000 km² only half-block, since swell wraps around them. The angle setting applies to the marked breaks.</p>
-        <p class="note">Each day is judged on one model snapshot near 08:00 local time. Heights are the swell's significant height in feet; in the Great Lakes, Mediterranean, Black Sea and Caspian (and their regional coasts) total waves are used instead, and the chop setting doesn't apply there.</p>
+        <label class="row" for="wind">Breaks: morning wind up to <span class="val" id="windv"></span><input type="range" id="wind" min="2" max="31" step="1"></label>
+        <label class="row" for="angle">Breaks: swell angle off their facing, up to <span class="val" id="anglev"></span><input type="range" id="angle" min="15" max="95" step="5"></label>
+        <label class="row" for="clean">Out at sea: wind chop up to <span class="val" id="cleanv"></span><input type="range" id="clean" min="0" max="5" step="1"></label>
+        <p class="note">At the marked breaks, either swell train can make a morning good, and the wind setting uses ERA5 morning wind just offshore; wind from the land (within 45° of straight offshore) always counts as clean. Out at sea and in the coloured coastal band, the chop setting judges the wave model's wind sea instead.</p>
+        <p class="note">Along the coast, each morning counts by how open the shore is to that morning's swell direction: the share of sight lines from that direction with 200 km of open water (100 km in lakes and enclosed seas). Bays and headlands block what they face; islands under 1,000 km² only half-block, since swell wraps around them.</p>
+        <p class="note">Each day is judged on one model snapshot near 08:00 local time. Heights are the swell's significant height in feet; in the Great Lakes, Mediterranean, Black Sea and Caspian (and their regional coasts) total waves are used instead, and neither wind nor chop applies there.</p>
       </section>
 
       <section class="block">
@@ -190,11 +178,12 @@ const PERIODS = [
   ...MONTHS.map((m, i) => ({ id: m.toLowerCase(), label: m, months: [i + 1] })),
 ];
 const PRESETS = [
-  { name: "Good+ (the PDF's rule): 4 ft over 9 s, or 3 ft over 14 s", h1: 4, t1: 9, longOn: true, h2: 3, t2: 14, maxb: 16, clean: 1, expo: 3 },
-  { name: "Longboard: 2 ft at 7 s, clean", h1: 2, t1: 7, longOn: false, h2: 2, t2: 14, maxb: 6, clean: 1, expo: 4 },
-  { name: "Shortboard: 3 ft at 10 s", h1: 3, t1: 10, longOn: true, h2: 2, t2: 14, maxb: 10, clean: 2, expo: 3 },
-  { name: "Big days: 10 ft at 13 s", h1: 10, t1: 13, longOn: false, h2: 8, t2: 16, maxb: 41, clean: 3, expo: 3 },
-  { name: "Lake and sea: 4 ft at 6 s", h1: 4, t1: 6, longOn: false, h2: 3, t2: 14, maxb: 10, clean: 5, expo: 3 },
+  { name: "Jon's Criteria: 4 ft over 9 s, or 3 ft over 14 s, light wind", h1: 4, t1: 9, longOn: true, h2: 3, t2: 14, maxb: 16, clean: 1, wind: 8, angle: 75 },
+  { name: "Small groundswell: 2 ft at 12 s, light wind", h1: 2, t1: 12, longOn: false, h2: 2, t2: 14, maxb: 10, clean: 2, wind: 8, angle: 75 },
+  { name: "Longboard: 2 ft at 7 s, glassy", h1: 2, t1: 7, longOn: false, h2: 2, t2: 14, maxb: 6, clean: 1, wind: 6, angle: 90 },
+  { name: "Shortboard: 3 ft at 10 s", h1: 3, t1: 10, longOn: true, h2: 2, t2: 14, maxb: 10, clean: 2, wind: 10, angle: 75 },
+  { name: "Big days: 10 ft at 13 s", h1: 10, t1: 13, longOn: false, h2: 8, t2: 16, maxb: 41, clean: 3, wind: 12, angle: 75 },
+  { name: "Lake and sea: 4 ft at 6 s", h1: 4, t1: 6, longOn: false, h2: 3, t2: 14, maxb: 10, clean: 5, wind: 31, angle: 75 },
 ];
 const crit = { ...PRESETS[0] };
 let period = PERIODS[0];
@@ -248,14 +237,9 @@ function binPass(h, t, c) {
   return crit.maxb > 40 || breaking(h + 0.5, tLow + 0.5) <= crit.maxb;
 }
 function luts() {
-  const H = meta.bins.height_ft, T = meta.bins.period_s;
-  const g = new Uint8Array(H * T * 6), p = new Uint8Array(H * T * 6 * 6);
-  for (let h = 0; h < H; h++) for (let t = 0; t < T; t++) for (let c = 0; c < 6; c++) {
-    const code = (h * T + t) * 6 + c, ok = binPass(h, t, c);
-    g[code] = ok;
-    for (let d = 0; d < 6; d++) p[code * 6 + d] = ok && (crit.expo >= 5 || d <= crit.expo);
-  }
-  return { g, p };
+  const H = meta.bins.height_ft, T = meta.bins.period_s, g = new Uint8Array(H * T * 6);
+  for (let h = 0; h < H; h++) for (let t = 0; t < T; t++) for (let c = 0; c < 6; c++) g[(h * T + t) * 6 + c] = binPass(h, t, c);
+  return { g };
 }
 function share(store, lut, e, months) {
   let good = 0, days = 0;
@@ -266,14 +250,65 @@ function share(store, lut, e, months) {
   }
   return days ? (100 * good) / days : NaN;
 }
-function shareIf(store, e, months, pass) {
-  let good = 0, days = 0;
-  for (const m of months) {
-    const i = e * 12 + m - 1;
-    days += store.days[i];
-    for (let k = store.start[i]; k < store.start[i + 1]; k++) if (pass(store.codes[k])) good += store.counts[k];
-  }
-  return days ? (100 * good) / days : NaN;
+
+// ---------- breaks: every morning judged exactly (raw records, surfmap/export.py _points) ----------
+// Record bytes: swell 1, swell 2 and all waves as height, period, direction; then wind speed and direction.
+function unpackPoints(buffer, n, width) {
+  const count = new Uint16Array(buffer, 0, n * 12), start = new Uint32Array(n * 12 + 1);
+  let total = 0;
+  for (let i = 0; i < n * 12; i++) { start[i] = total; total += count[i]; }
+  start[n * 12] = total;
+  return { n, width, start, recs: new Uint8Array(buffer, n * 24, total * width) };
+}
+const angleOff = (from, facing) => Math.abs(((((from - facing) % 360) + 540) % 360) - 180);
+function train(r, o, k) {  // swell train k (0, 1) or all waves (2) at record offset o: [ft, s, from] or null
+  const h = r[o + 3 * k];
+  if (h === 255) return null;
+  const [hs, tp, dir] = meta.scale;
+  return [h * hs * FT, r[o + 3 * k + 1] * tp, r[o + 3 * k + 2] * dir];
+}
+function trainOk(t, facing) {
+  if (!t) return false;
+  const [hft, tp, from] = t;
+  return ((hft >= crit.h1 && tp >= crit.t1) || (crit.longOn && hft >= crit.h2 && tp >= crit.t2))
+    && (crit.maxb > 40 || breaking(hft, tp) <= crit.maxb) && (crit.angle > 90 || angleOff(from, facing) <= crit.angle);
+}
+function windOk(r, o, facing) {  // light, or blowing from the land
+  const kt = r[o + 9];
+  if (crit.wind > 30 || kt === 255) return true;
+  return kt * meta.scale[9] <= crit.wind || angleOff(r[o + 10] * meta.scale[10], facing + 180) <= meta.offshore;
+}
+function goodTrain(p, r, o) {  // the train that makes this morning good (the bigger if both), or null
+  if (p.measure === "waves") { const t = train(r, o, 2); return trainOk(t, p.facing) ? t : null; }  // no wind test
+  if (!windOk(r, o, p.facing)) return null;
+  const a = train(r, o, 0), b = train(r, o, 1), okA = trainOk(a, p.facing), okB = trainOk(b, p.facing);
+  return okA && okB ? (b[0] > a[0] ? b : a) : okA ? a : okB ? b : null;
+}
+function eachMorning(e, months, visit) {
+  const { start, width } = pts;
+  for (const m of months) for (let k = start[e * 12 + m - 1]; k < start[e * 12 + m]; k++) visit(k * width);
+}
+function pointShare(e, months) {
+  const p = meta.points[e];
+  let good = 0, n = 0;
+  eachMorning(e, months, o => { n++; if (goodTrain(p, pts.recs, o)) good++; });
+  return n ? (100 * good) / n : NaN;
+}
+function pointTypical(e, months) {
+  const p = meta.points[e], hs = [], ts = [], from = new Float64Array(16);
+  eachMorning(e, months, o => {
+    const t = goodTrain(p, pts.recs, o);
+    if (t) { hs.push(t[0]); ts.push(t[1]); from[Math.round(t[2] / 22.5) % 16]++; }
+  });
+  return hs.length ? `${Math.round(d3.median(hs))} ft @ ${Math.round(d3.median(ts))} s from ${P16[d3.maxIndex(from)]}` : "–";
+}
+function pointWind(e, months) {  // median speed and most common direction over all the mornings
+  const kts = [], from = new Float64Array(16);
+  eachMorning(e, months, o => {
+    if (pts.recs[o + 9] === 255) return;
+    kts.push(pts.recs[o + 9] * meta.scale[9]); from[Math.round((pts.recs[o + 10] * meta.scale[10]) / 22.5) % 16]++;
+  });
+  return kts.length ? `${Math.round(d3.median(kts))} kt ${P16[d3.maxIndex(from)]}` : "–";
 }
 let cellPct, pointPct, lut;
 function recompute() {
@@ -281,7 +316,7 @@ function recompute() {
   cellPct = new Float32Array(grid.n);
   for (let e = 0; e < grid.n; e++) cellPct[e] = share(grid, lut.g, e, period.months);
   pointPct = new Float32Array(pts.n);
-  for (let e = 0; e < pts.n; e++) pointPct[e] = share(pts, lut.p, e, period.months);
+  for (let e = 0; e < pts.n; e++) pointPct[e] = pointShare(e, period.months);
   computeField(); draw(); renderTop(); renderDetail();
 }
 
@@ -645,12 +680,6 @@ function bestMonths(shares) {
   for (let s = 0; s < 12; s++) { const v = (shares[s] + shares[(s + 1) % 12] + shares[(s + 2) % 12]) / 3; if (v > best) { best = v; at = s; } }
   return best < 0 ? "–" : `${MONTHS[at]}–${MONTHS[(at + 2) % 12]} ${Math.round(best)}%`;
 }
-function windText(p) {
-  const w = period.months.map(m => p.wind?.[m - 1]).filter(Boolean);
-  if (!w.length) return "–";
-  const dirs = d3.rollups(w, v => v.length, d => P16[Math.round(d[1] / 22.5) % 16]).sort((a, b) => b[1] - a[1]);
-  return `${Math.round(d3.median(w, d => d[0]))} kt ${dirs[0][0]}`;
-}
 function bars(shares) {
   const w = 340, h = 120, bw = w / 12, pad = 16, months = new Set(period.months);
   const y = v => h - pad - (Math.min(100, v || 0) / 100) * (h - pad - 14);
@@ -693,9 +722,11 @@ function renderDetail() {
     const p = meta.points[selected.i], i = selected.i;
     title = p.name; sub = `${p.region}${p.group && p.kind === "coast" ? " · " + p.group : ""}`;
     badge = { break: "Named break", stretch: `Under-the-radar ◆${p.num}`, coast: "Regional coast" }[p.kind];
-    pct = pointPct[i]; shares = MONTHS.map((_, m) => share(pts, lut.p, i, [m + 1]));
-    typ = typical(pts, i, period.months, code => lut.p[code], code => Math.floor(code / 6));
-    facts = `<dt>Faces</dt><dd>${p.facing}°</dd><dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${windText(p)}</dd><dt>Measured on</dt><dd>${p.measure === "waves" ? "total waves" : "swell"}</dd>`;
+    pct = pointPct[i]; shares = MONTHS.map((_, m) => pointShare(i, [m + 1]));
+    typ = pointTypical(i, period.months);
+    facts = `<dt>Faces</dt><dd>${p.facing}°</dd><dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${pointWind(i, period.months)}</dd>` +
+      `<dt>Measured on</dt><dd>${p.measure === "waves" ? "total waves (no wind test)" : "either swell train"}</dd>` +
+      `<dt>Waves read at</dt><dd>${p.source || "model cell"}, ${latlon(p.cell[0], p.cell[1], 2)}</dd>`;
   } else if (selected.type === "coast") {
     const c = selected.c, s = R.src[c], cell = R.sources[s], open = R.open.subarray(c * 16, c * 16 + 16);
     const pass = code => open[code & 15] >= 128 && lut.g[code >> 4];
@@ -744,12 +775,13 @@ document.getElementById("top").addEventListener("click", e => {
 });
 
 // ---------- controls ----------
-const ids = ["h1", "t1", "h2", "t2", "maxb"];
-const fmt = { h1: v => `${v} ft`, h2: v => `${v} ft`, t1: v => `${v} s`, t2: v => `${v} s`, maxb: v => v > 40 ? "no limit" : `${v} ft` };
+const ids = ["h1", "t1", "h2", "t2", "maxb", "wind", "angle", "clean"];
+const CHOP = ["0.2×", "0.35×", "0.5×", "0.75×", "1×"];
+const fmt = { h1: v => `${v} ft`, h2: v => `${v} ft`, t1: v => `${v} s`, t2: v => `${v} s`, maxb: v => v > 40 ? "no limit" : `${v} ft`,
+  wind: v => v > 30 ? "any" : `${v} kt`, angle: v => v > 90 ? "any" : `±${v}°`, clean: v => v >= 5 ? "any" : `${CHOP[v]} the swell` };
 function syncControls() {
   ids.forEach(id => { document.getElementById(id).value = crit[id]; document.getElementById(id + "v").textContent = fmt[id](crit[id]); });
   document.getElementById("longon").checked = crit.longOn; document.getElementById("longbox").hidden = !crit.longOn;
-  document.getElementById("clean").value = crit.clean; document.getElementById("expo").value = crit.expo;
 }
 const presetSel = document.getElementById("preset");
 presetSel.innerHTML = PRESETS.map((p, i) => `<option value="${i}">${p.name}</option>`).join("") + `<option value="custom" hidden>Custom</option>`;
@@ -758,8 +790,6 @@ let pending;
 function changed() { presetSel.value = "custom"; clearTimeout(pending); pending = setTimeout(recompute, 60); }
 ids.forEach(id => document.getElementById(id).addEventListener("input", e => { crit[id] = +e.target.value; document.getElementById(id + "v").textContent = fmt[id](crit[id]); changed(); }));
 document.getElementById("longon").onchange = e => { crit.longOn = e.target.checked; document.getElementById("longbox").hidden = !crit.longOn; changed(); };
-document.getElementById("clean").onchange = e => { crit.clean = +e.target.value; changed(); };
-document.getElementById("expo").onchange = e => { crit.expo = +e.target.value; changed(); };
 
 const periodsEl = document.getElementById("periods");
 periodsEl.innerHTML = PERIODS.map(p => `<button class="chip" data-id="${p.id}" aria-pressed="${p === period}">${p.label}</button>`).join("");
@@ -799,7 +829,7 @@ async function localTools() {
     document.getElementById("loading").textContent = "Loading the model data (about 18 MB)…";
     const [g, p, c, l, r] = await Promise.all([bytes("data/grid.b64.txt"), bytes("data/points.b64.txt"), bytes("data/coast.b64.txt"),
       json("data/land.json"), json("data/raster.json")]);
-    grid = unpack(g, meta.cells.lat.length); pts = unpack(p, meta.points.length); coastBins = unpack(c, r.coast.sources.length); land = splitLand(l);
+    grid = unpack(g, meta.cells.lat.length); pts = unpackPoints(p, meta.points.length, meta.morning.length); coastBins = unpack(c, r.coast.sources.length); land = splitLand(l);
     setupRaster(r, new Uint8Array(await inflate(r.cat)), await inflate(r.coast.data));
     document.getElementById("about").textContent += ` · data as of ${meta.generated}; ${meta.res}° ocean grid, coast at ${r.res}°`;
     document.getElementById("loading").hidden = true;

@@ -135,8 +135,8 @@ def _table(fig, rect, spots, stretches, title, breakout_page):
     ax = fig.add_axes(rect)
     ax.axis("off")
     ax.text(0, 1, title, fontsize=12, weight="bold", va="top")
-    ax.text(0, 0.968, "% of mornings good+ with swell inside the break's exposure\n"
-            "window; best per 100 miles; then typical morning wind (GFS)",
+    ax.text(0, 0.968, "% of mornings good+ at the break: swell inside its window, wind\n"
+            "light or offshore; best per 100 miles; then typical morning wind",
             fontsize=8, color=INK_2, va="top", linespacing=1.3)
     top = _distinct([s for s in spots if s["basin"] is None], 15)
     y, step = 0.905, 0.0375
@@ -275,8 +275,8 @@ def page(pdf, m, land, breakout_page):
     lakes = (f" Missing peak periods (Great Lakes, Copernicus years) are taken as {m.tp_ratio:.2f}× the mean "
              f"period." if m.tp_ratio else "")
     fig.text(0.02, 0.011,
-             "Offshore sea state only: bathymetry, sheltering, tide and wind direction at each break are not modelled. "
-             "Break percentages use the nearest seaward model cell within 250 km." + lakes,
+             "Map colours: offshore sea state only; bathymetry, sheltering and local wind are not modelled. "
+             "Breaks and \u25c6 stretches: MFWAM (Copernicus Marine) at each break's ~8 km cell, ERA5 morning wind." + lakes,
              fontsize=7.5, color=INK_3, va="top")
     pdf.savefig(fig, dpi=220)
     return fig
@@ -320,7 +320,7 @@ def _tide_text(name):
 
 
 WIND_NOTE = ("Morning wind = median speed and most common direction over all mornings of the period, "
-             "NOAA GFS 10 m wind just offshore, December 2022 onward.")
+             "ERA5 10 m wind just offshore.")
 
 
 def _breakout_page(pdf, title, subtitle, kind, rows, notes):
@@ -400,9 +400,9 @@ def stretch_page(pdf):
                 f"year-round, or \u2265{discover.MIN_PEAK}% over its best three months),\nat least {discover.FAR_KM} "
                 f"km from the well-known breaks and within {discover.TOWN_KM} km of a town of "
                 f"{discover.TOWN_POP:,}+. Listed by year-round consistency; numbers match the \u25c6 markers on the maps.")
-    notes = ("Each stretch is read from one WW3 cell 50\u2013120 km offshore. The rule has no wind, which flatters "
-             "cold, steady coasts (Chile, Peru, Namibia) and storm coasts (southern Chile, New Zealand's West "
-             "Coast); check local wind and access before booking a trip.")
+    notes = (f"Stretches were found on the WW3 grid; each is rated at its coast from M\u00e9t\u00e9o-France MFWAM "
+             f"(Copernicus Marine, ~8 km), either swell train, with ERA5 morning wind \u2264 {config.MAX_WIND_KT:g} kt "
+             f"or offshore. Check local reefs and access before booking a trip.")
     return _breakout_page(pdf, "Under-the-radar stretches, month by month", subtitle, "Stretch", rows, notes)
 
 
@@ -420,9 +420,9 @@ def spot_page(pdf):
         r["tag"] = str(i)
     subtitle = (f"The {len(rows)} well-known breaks with the strongest three-month season (best one per 100 miles "
                 f"of coast), listed by year-round consistency.\nBreaks in the enclosed seas are on the map insets.")
-    notes = ("Each break is read from its nearest seaward model cell (0.5\u00b0 in East and Southeast Asia, 1\u00b0 "
-             "elsewhere) with swell inside its exposure window. The rule has no wind; local reefs, points and "
-             "sheltering are not modelled.")
+    notes = (f"Each break is read from M\u00e9t\u00e9o-France MFWAM (Copernicus Marine) at its ~8 km cell: either swell "
+             f"train inside its exposure window, with ERA5 morning wind \u2264 {config.MAX_WIND_KT:g} kt or offshore. "
+             f"Reefs, points and sheltering inside that cell are not modelled.")
     return _breakout_page(pdf, "Popular breaks, month by month", subtitle, "Break", rows, notes)
 
 
@@ -465,9 +465,9 @@ def _region_subtitle(std, tp_ratio):
     if std.get("ocean"):  # the good+ rule in brief; the map pages' footer has it in full
         return (f"Good+ = swell \u2265 {config.MIN_SWELL_HEIGHT * rating.FT:.0f} ft over {config.MIN_SWELL_PERIOD:g} s, or "
                 f"\u2265 {config.LONG_SWELL_HEIGHT * rating.FT:.0f} ft over {config.LONG_SWELL_PERIOD:g} s; breaking under "
-                f"{config.MAX_BREAKER * rating.FT:.0f} ft; wind sea \u2264 {config.MAX_WINDSEA_RATIO:g}\u00d7 swell; on the "
-                f"~{config.LOCAL_HOUR:02d}:00 sample.\nOpen-ocean coasts: the world maps' good+ standard, read from "
-                f"M\u00e9t\u00e9o-France MFWAM at each coast's ~8 km cell, with swell aimed at the shore.")
+                f"{config.MAX_BREAKER * rating.FT:.0f} ft; either swell train, aimed at the shore; morning wind \u2264 "
+                f"{config.MAX_WIND_KT:g} kt or offshore; on the ~{config.LOCAL_HOUR:02d}:00 sample.\nRead from "
+                f"M\u00e9t\u00e9o-France MFWAM (Copernicus Marine) at each coast's ~8 km cell, with ERA5 wind just offshore.")
     period = (f"dominant period \u2265 {std['min_period']:g} s (taken as {tp_ratio:.2f}\u00d7 the mean period)"
               if std["peak"] else f"mean period \u2265 {std['min_period']:g} s")
     return (f"{std['name']} = total wave height {std['min_hs'] * rating.FT:.0f}\u2013{std['max_hs'] * rating.FT:.0f} ft "
@@ -569,14 +569,15 @@ def _region_table(fig, rect, rows, std):
 def _region_footer(fig, rows, std):
     pending = "" if all(r["complete"] for r in rows) else \
         " Months marked \u2013 are still downloading."
-    fig.text(0.02, 0.05, "M\u00e9t\u00e9o-France MFWAM (via Open-Meteo and Copernicus Marine) at each coast's model cell, a few km "
-             f"offshore. Typical {std['noun']} morning = medians over {std['noun']} mornings: "
+    fig.text(0.02, 0.05, "M\u00e9t\u00e9o-France MFWAM (Copernicus Marine) at each coast's ~8 km cell, a few km "
+             f"offshore; ERA5 wind. Typical {std['noun']} morning = medians over {std['noun']} mornings: "
              + ("swell height @ peak period and the direction it comes from." if std.get("ocean") else
                 f"total wave height @ {'dominant' if std['peak'] else 'mean'} period and the direction waves come from.")
              + pending,
              fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.033, f"Coasts are ranked by year-round {std['noun']} %. " + TIDE_NOTE + " " + WIND_NOTE +
-             " Neither standard uses wind; check it before paddling out.",
+             ("" if std.get("ocean") else f" {std['name']} doesn't use wind (lake and sea surf is windswell); "
+              f"Ocean good+ does: \u2264 {config.MAX_WIND_KT:g} kt or offshore."),
              fontsize=7.5, color=INK_3, va="top")
 
 
@@ -632,7 +633,7 @@ def build(output, preview_dir=None):
               for m in config.MONTHS]
     pages += [(region, lambda pdf, region=region: region_page(pdf, region, land)) for region in REGIONS]
     assert pages[stretches_page - 1][0] == "Under-the-radar stretches"
-    with PdfPages(output) as pdf:
+    with PdfPages(output, metadata={"Title": "Predictive Surf Atlas"}) as pdf:
         n = 1
         for title, render in pages:
             n += _save(render(pdf), preview_dir, n, title)

@@ -1,11 +1,11 @@
 ---
 name: rebuild-pdf
-description: Download any missing wave/wind data and rebuild surf_good_days.pdf, then check the pages render. Use when asked to update, regenerate, refresh or send the surf PDF, or after changing the rule, spots or regions.
+description: Download any missing wave/wind data and rebuild predictive_surf_atlas.pdf, then check the pages render. Use when asked to update, regenerate, refresh or send the surf PDF, or after changing the rule, spots or regions.
 ---
 
 # Rebuild the surf PDF
 
-The PDF is `surf_good_days.pdf` at the repo root (26 pages: year-round, popular breaks,
+The PDF is `predictive_surf_atlas.pdf` at the repo root (26 pages: year-round, popular breaks,
 under-the-radar stretches, two half-years, twelve months, regional pages).
 
 ## 1. Data
@@ -35,7 +35,7 @@ as `... failed:` and the final line is `done: N, failed: M`.
 ## 2. Build
 
 ```sh
-uv run python -m surfmap build        # writes surf_good_days.pdf (several minutes)
+uv run python -m surfmap build        # writes predictive_surf_atlas.pdf (several minutes)
 ```
 
 ## 3. Check before handing it over
@@ -45,7 +45,7 @@ Render the pages to PNG and look at them. Don't trust the build exiting 0:
 ```sh
 uv run --with pymupdf python - <<'EOF'
 import fitz  # PyMuPDF
-doc = fitz.open("surf_good_days.pdf")
+doc = fitz.open("predictive_surf_atlas.pdf")
 for i, page in enumerate(doc, 1):
     page.get_pixmap(dpi=60).save(f"/tmp/page_{i:02d}.png")
 print(len(doc), "pages")

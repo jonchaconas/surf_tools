@@ -2,7 +2,8 @@
 
     uv run python -m surfmap fetch            # both sources (cached in data/)
     uv run python -m surfmap fetch --source inland
-    uv run python -m surfmap build            # writes surf_good_days.pdf
+    uv run python -m surfmap fetch --source points   # Copernicus waves + ERA5 wind at each break
+    uv run python -m surfmap build            # writes predictive_surf_atlas.pdf
     uv run python -m surfmap discover         # rewrites surfmap/stretches.py
     uv run python -m surfmap gui              # the interactive atlas, locally
 """
@@ -17,9 +18,9 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("fetch", help="download WW3 and Open-Meteo data into data/")
-    f.add_argument("--source", choices=("all", "ww3", "inland", "wind", "regions", "copernicus"), default="all")
+    f.add_argument("--source", choices=("all", "ww3", "inland", "wind", "regions", "copernicus", "points"), default="all")
     b = sub.add_parser("build", help="render one PDF page per month")
-    b.add_argument("-o", "--output", default=str(config.ROOT / "surf_good_days.pdf"))
+    b.add_argument("-o", "--output", default=str(config.ROOT / "predictive_surf_atlas.pdf"))
     sub.add_parser("discover", help="rewrite stretches.py: good coast far from the known breaks")
     e = sub.add_parser("export", help="write web/data/ for the interactive atlas")
     e.add_argument("--res", type=int, default=2, help="ocean grid in degrees: 2 for the shareable page, 1 locally")
@@ -42,6 +43,9 @@ def main():
         if args.source == "copernicus":  # fills whatever Open-Meteo hasn't delivered; needs a login
             from . import cmems
             cmems.fill()
+        if args.source == "points":  # needs a Copernicus login and a CDS key
+            from . import points
+            points.fetch()
     elif args.cmd == "discover":
         from . import discover
         discover.write(discover.find())

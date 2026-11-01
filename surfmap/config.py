@@ -37,3 +37,9 @@ MAX_WINDSEA_RATIO = 0.35  # wind-sea Hs / swell Hs; low means a clean, swell-dom
 
 # Spot rankings also require the swell to come from within this many degrees of the facing.
 EXPOSURE = 75
+
+# At a break (named breaks, stretches, regional coasts), where there is ERA5 wind at the spot, the
+# morning is clean when the wind is this light or blows from the land, within OFFSHORE degrees of
+# straight offshore. This replaces the open-ocean wind-sea test, which reads chop far out to sea.
+MAX_WIND_KT = 8.0
+OFFSHORE = 45

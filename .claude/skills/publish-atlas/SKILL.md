@@ -1,6 +1,6 @@
 ---
 name: publish-atlas
-description: Export web/data for the interactive Surf Climate Atlas, test the page in a headless browser, republish it to its claude.ai artifact URL and push (which also deploys GitHub Pages). Use after changing web/index.html, surfmap/export.py, the rule, or any data the atlas shows.
+description: Export web/data for the interactive Predictive Surf Atlas, test the page in a headless browser, republish it to its claude.ai artifact URL and push (which also deploys GitHub Pages). Use after changing web/index.html, surfmap/export.py, the rule, or any data the atlas shows.
 ---
 
 # Export, test and publish the atlas

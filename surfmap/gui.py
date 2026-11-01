@@ -1,4 +1,4 @@
-"""Run the Surf Climate Atlas locally: `python -m surfmap gui`.
+"""Run the Predictive Surf Atlas locally: `python -m surfmap gui`.
 
 Serves web/ (the same page that is published as a shareable link) and adds three actions
 the page shows only here: download new data, rebuild the PDF, and refresh the app's own data
@@ -27,7 +27,7 @@ class _Jobs:
     def steps(self, name):
         py = [sys.executable, "-m", "surfmap"]
         return {
-            "fetch": [py + ["fetch", "--source", s] for s in ("ww3", "wind", "copernicus")],
+            "fetch": [py + ["fetch", "--source", s] for s in ("ww3", "points", "copernicus")],
             "build": [py + ["build"]],
             "export": [py + ["export", "--res", str(self.res)]],
         }[name]
@@ -109,7 +109,7 @@ def serve(port=8765, res=1, open_browser=True):
 
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
-    print(f"Surf Climate Atlas at {url}  (Ctrl-C to stop)")
+    print(f"Predictive Surf Atlas at {url}  (Ctrl-C to stop)")
     if open_browser:
         webbrowser.open(url)
     try:

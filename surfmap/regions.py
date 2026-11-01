@@ -10,7 +10,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from . import config, inland, rating, ww3
+from . import config, inland, rating
 
 # A regional standard: total wave height min_hs-max_hs m with period >= min_period s, arriving
 # within config.EXPOSURE degrees of the shore's facing. peak=True compares the dominant (peak)
@@ -176,17 +176,17 @@ def fetch():
 
 @lru_cache(maxsize=None)
 def _load(region, month):
-    """Per coast, {variable: morning samples} for one calendar month; None until every season is cached."""
-    paths = [_path(region, y, month) for y in config.seasons(month)]
-    if not all(p.exists() for p in paths):
-        return None
-    keep = np.array(ww3.days(month), dtype="datetime64[D]")
-    per = [{} for _ in REGIONS[region]["coasts"]]
-    for p in paths:
-        for k, row in enumerate(json.loads(p.read_text())):
-            for v, a in inland.morning(row, keep).items():
-                per[k].setdefault(v, []).append(a)
-    return [{v: np.concatenate(a) for v, a in d.items()} for d in per]
+    """Per coast, its morning arrays (points.mornings: MFWAM waves with both swell trains, ERA5
+    wind) for one calendar month's seasons; None until every coast is downloaded."""
+    from . import points
+
+    out = []
+    for _, _, lat, lon, *_ in REGIONS[region]["coasts"]:
+        m = points.mornings(lat, lon)
+        if m is None:
+            return None
+        out.append(points.season(m, (month,)))
+    return out
 
 
 def standard(region):
@@ -194,30 +194,27 @@ def standard(region):
 
 
 def _tally(m, facing, tp_ratio, std):
-    """Mornings meeting the region's standard ("surf") and ocean good+ ("good"), and what the former
-    looked like: total sea for the windswell and lake standards, the swell for the ocean one."""
-    peak, mean = m["swell_wave_peak_period"], m["swell_wave_period"]
-    # No peak period on the Great Lakes or in Copernicus-filled years: estimate it, as in inland.load.
-    tp = np.where(np.isnan(peak) & np.isfinite(mean), mean * tp_ratio, peak)
-    good = rating.is_good(m["swell_wave_height"], tp, m["wind_wave_height"]) & \
-        rating.exposed(m["swell_wave_direction"], facing)
-    hs = m["wave_height"]
+    """Mornings meeting the region's standard ("surf") and good+ at a break ("good": either swell
+    train, light or offshore wind), and what the former looked like: total sea for the windswell
+    and lake standards, which don't use wind, and the qualifying swell for the ocean one."""
+    good = rating.break_good(m, facing)
+    hs = m["hs"]
     if std.get("ocean"):
-        surf, shown = good, (m["swell_wave_height"], tp, m["swell_wave_direction"])
+        surf, shown = good, rating.good_swell(m, facing)
     else:
-        tm = m["wave_period"] * (tp_ratio if std["peak"] else 1.0)
+        tm = m["tm"] * (tp_ratio if std["peak"] else 1.0)
         with np.errstate(invalid="ignore"):
             surf = (hs >= std["min_hs"]) & (hs <= std["max_hs"]) & (tm >= std["min_period"]) & \
-                rating.exposed(m["wave_direction"], facing)
-        shown = (hs, tm, m["wave_direction"])
-    return dict(surf=int(surf.sum()), good=int(good.sum()), n=int(np.isfinite(hs).sum()),
+                rating.exposed(m["dir"], facing)
+        shown = (hs, tm, m["dir"])
+    return dict(surf=int(surf.sum()), good=int(good.sum()), n=len(hs),
                 hs=shown[0][surf], tm=shown[1][surf], dir=shown[2][surf])
 
 
 def summary(region, tp_ratio):
     """Per coast: surfable % by month (Jan..Dec, NaN while downloading), year-round surfable and
     ocean good+ %, and the median surfable morning."""
-    from . import wind
+    from . import points
     from .analysis import _circmean
 
     monthly = {m: _load(region, m) for m in range(1, 13)}
@@ -232,7 +229,8 @@ def summary(region, tp_ratio):
             name=name, region=area, lat=lat, lon=lon, facing=facing, label=label[0] if label else None,
             months=[100 * parts[m]["surf"] / max(parts[m]["n"], 1) if m in parts else np.nan for m in range(1, 13)],
             pct=100 * surf / max(n, 1), ocean=100 * good / max(n, 1), complete=len(parts) == 12,
-            hs=med(hs), tp=med(tm), dir=_circmean(dr), wind=wind.typical(name, tuple(range(1, 13)))))
+            hs=med(hs), tp=med(tm), dir=_circmean(dr),
+            wind=points.typical_wind(points.season(m, range(1, 13))) if (m := points.mornings(lat, lon)) else None))
     return rows
 
 

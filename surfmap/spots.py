@@ -11,6 +11,7 @@ SPOTS = [
 ("Waikiki","Oahu, Hawaii",21.270,-157.830,190),
 ("Montara","California",37.545,-122.516,265),("Ocean Beach SF","California",37.760,-122.512,270),
 ("Steamer Lane","California",36.951,-122.026,220),("Rincon","California",34.374,-119.477,230),
+("Ventura","California",34.274,-119.297,200),
 ("Malibu","California",34.035,-118.678,190),("Huntington Beach","California",33.655,-118.004,220),
 ("Trestles","California",33.382,-117.589,220),("Black's Beach","California",32.889,-117.253,270),
 ("Short Sands","Oregon",45.760,-123.965,260),("Westport","Washington",46.890,-124.120,270),
