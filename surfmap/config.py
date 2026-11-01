@@ -26,6 +26,9 @@ def seasons(month):
 
 # Each day is judged on one snapshot near this local solar hour (dawn-patrol conditions).
 LOCAL_HOUR = 8
+# Other local solar hours the atlas offers for the marked spots and the forecast (dawn to evening).
+# The map's colours stay at LOCAL_HOUR: the ocean grid was downloaded with one sample a day.
+HOURS = (6, 8, 12, 15, 18)
 
 # A morning is good+ when the swell meets either height/period pair (4 ft over 9 s, or 3 ft over
 # 14 s), breaks under MAX_BREAKER, and dominates the wind sea.

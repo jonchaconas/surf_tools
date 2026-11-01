@@ -154,11 +154,11 @@ def fetch(workers=4, early=False):
     print(f"done: {done}, failed: {failed}", flush=True)
 
 
-def _local_mornings(t_utc, lon, step_h):
-    """Indices of the step nearest config.LOCAL_HOUR solar time on each local day, and those days."""
+def _local_mornings(t_utc, lon, step_h, hour=config.LOCAL_HOUR):
+    """Indices of the step nearest `hour` local solar time on each local day, and those days."""
     local = t_utc + np.timedelta64(int(round(lon / 15 * 60)), "m")
     hours = (local - local.astype("datetime64[D]")) / np.timedelta64(1, "h")
-    keep = np.flatnonzero(np.abs(hours - config.LOCAL_HOUR) <= step_h / 2)
+    keep = np.flatnonzero(np.abs(hours - hour) <= step_h / 2)
     days = local[keep].astype("datetime64[D]")
     first = np.unique(days, return_index=True)[1]
     return keep[first], days[first]
@@ -174,8 +174,9 @@ def _open(paths):
 
 
 @lru_cache(maxsize=None)
-def mornings(lat, lon):
-    """Morning arrays for one point, or None until both downloads are cached:
+def mornings(lat, lon, hour=config.LOCAL_HOUR):
+    """Arrays for one point, a sample a day nearest `hour` local solar time (the morning by default),
+    or None until both downloads are cached:
     day, hs1/tp1/dir1 and hs2/tp2/dir2 (swell partitions; tp estimated from the mean period),
     hs/tm/dir (all waves), ww (wind-sea height), kt and wind_from (ERA5 10 m wind), tide (m, EOT20), cell, source.
     In California the waves come from CDIP's nearshore model (cdip.py) instead."""
@@ -185,7 +186,7 @@ def mornings(lat, lon):
     from .inland import TP_RATIO
 
     with _open([_waves_path(lat, lon, True), wp]) as w:
-        idx, days = _local_mornings(w.time.values, lon, 3)
+        idx, days = _local_mornings(w.time.values, lon, 3, hour)
         g = lambda v: w[v].values[idx].astype(float)
         tide = tides.height(lat, lon, w.time.values[idx])
         out = dict(day=days, cell=tuple(w.attrs["cell"]), tide=np.full(len(days), np.nan) if tide is None else tide,
@@ -194,7 +195,7 @@ def mornings(lat, lon):
                    hs=g("VHM0"), tm=g("VTM10"), dir=g("VMDR"), ww=g("VHM0_WW"))
     with _open([_wind_path(lat, lon, True), vp]) as v:
         t = v["valid_time"].values if "valid_time" in v else v["time"].values
-        widx, wdays = _local_mornings(t, lon, 1)
+        widx, wdays = _local_mornings(t, lon, 1, hour)
         u, vv = v["u10"].values[widx].astype(float), v["v10"].values[widx].astype(float)
     pos = np.searchsorted(wdays, days)
     hit = (pos < len(wdays)) & (wdays[np.minimum(pos, len(wdays) - 1)] == days)
@@ -217,7 +218,7 @@ def mornings(lat, lon):
     # California: CDIP's nearshore model replaces the offshore waves wherever it has the morning.
     from . import cdip
 
-    near = cdip.mornings(lat, lon)
+    near = cdip.mornings(lat, lon, hour)
     if near is not None:
         pos = np.minimum(np.searchsorted(near["day"], days), len(near["day"]) - 1)
         hit = (near["day"][pos] == days) & np.isfinite(near["hs"][pos])

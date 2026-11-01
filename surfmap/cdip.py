@@ -97,16 +97,15 @@ def _path(site):
 
 
 def fetch_site(site, lon):
-    """Morning spectra at one site, from the WW3 archive's start (2017) to now: hindcast and nowcast."""
+    """Hourly spectra at one site, from the WW3 archive's start (2017) to now: hindcast and nowcast."""
     path = _path(site)
     if path.exists():
         return
-    hour = int(round(config.LOCAL_HOUR - lon / 15)) % 24
     parts = []
     for kind in ("hindcast", "nowcast"):
         with xr.open_dataset(URL.format(site, kind)) as d:
             t = d.waveTime.values
-            keep = np.flatnonzero((t >= np.datetime64("2016-12-31")) & (t.astype("datetime64[h]").astype(int) % 24 == hour))
+            keep = np.flatnonzero(t >= np.datetime64("2016-12-31"))
             if not len(keep):
                 continue
             sub = d[["waveHs", "waveTp", "waveDp", "waveEnergyDensity", "waveMeanDirection"]]
@@ -151,18 +150,21 @@ def _trains(e, f, df, dirs):
     return sorted(out, key=lambda t: -t[0])
 
 
-def mornings(lat, lon):
-    """Wave arrays like points.mornings() from the break's MOP site, or None without one:
-    day, hs1/tp1/dir1 and hs2/tp2/dir2 (the two biggest trains), hs/tp/dir (all waves), cell, site."""
+def mornings(lat, lon, hour=config.LOCAL_HOUR):
+    """Wave arrays like points.mornings() from the break's MOP site at the hour nearest `hour` local
+    solar time each day, or None without a site: day, hs1/tp1/dir1 and hs2/tp2/dir2 (the two biggest
+    trains), hs/tp/dir (all waves), cell, site."""
+    from .points import _local_mornings
+
     site = site_for(lat, lon)
     if site is None or not _path(site).exists():
         return None
     with xr.open_dataset(_path(site)) as d:
+        idx, days = _local_mornings(d.waveTime.values, lon, 1, hour)
         f, df = d.waveFrequency.values, d.waveBandwidth.values
-        e, dirs = d.waveEnergyDensity.values, d.waveMeanDirection.values
-        local = d.waveTime.values + np.timedelta64(int(round(lon / 15 * 60)), "m")
-        out = dict(day=local.astype("datetime64[D]"), hs=d.waveHs.values.astype(float), tp=d.waveTp.values.astype(float),
-                   dir=d.waveDp.values.astype(float), cell=(d.attrs["lat"], d.attrs["lon"]), site=site,
+        e, dirs = d.waveEnergyDensity.values[idx], d.waveMeanDirection.values[idx]
+        out = dict(day=days, hs=d.waveHs.values[idx].astype(float), tp=d.waveTp.values[idx].astype(float),
+                   dir=d.waveDp.values[idx].astype(float), cell=(d.attrs["lat"], d.attrs["lon"]), site=site,
                    depth=d.attrs["depth"])
     n = len(out["day"])
     for k in ("hs1", "tp1", "dir1", "hs2", "tp2", "dir2"):

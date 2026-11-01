@@ -4,12 +4,12 @@ judges each one by the viewer's own criteria.
 Waves: CDIP MOP's nearshore forecast in California; elsewhere Copernicus Marine's MFWAM forecast at
 the break's own ~8 km cell (the same model and cell as the ten-year record) when a Copernicus login is
 available, else Open-Meteo's marine forecast. Wind: Open-Meteo's 10 m wind forecast just offshore.
-Tide is left to the page, which has each break's tide constituents. Each morning is the step
-nearest config.LOCAL_HOUR solar time, dated by the local day.
+Tide is left to the page, which has each break's tide constituents. Each day is sampled at every
+hour in config.HOURS (local solar time), dated by the local day.
 
 Reads the break list from web/data/meta.json and writes web/data/forecast.json:
-    {"generated": ISO time, "sources": {...}, "points": {"name@lat,lon": [[day, utc hour,
-     hs1, tp1, dir1, hs2, tp2, dir2, hs, tp, dir, kt, wind_from], ...]}}
+    {"generated": ISO time, "sources": {...}, "hours": [...], "points": {"name@lat,lon": {"8": [[day,
+     utc hour, hs1, tp1, dir1, hs2, tp2, dir2, hs, tp, dir, kt, wind_from], ...], "12": [...], ...}}}
 """
 
 import json
@@ -39,11 +39,15 @@ def _now():
 
 
 def _rows(times, lon, values, step_h):
-    """{local day: (utc hour, values at the morning step)} for the step nearest LOCAL_HOUR each day."""
+    """{hour: {local day: (utc hour, values)}}: the step nearest each config.HOURS solar time, each day."""
     from .points import _local_mornings
 
-    idx, days = _local_mornings(np.asarray(times, dtype="datetime64[m]"), lon, step_h)
-    return {str(d): (str(np.datetime64(times[i], "h")), [v[i] for v in values]) for i, d in zip(idx, days)}
+    t = np.asarray(times, dtype="datetime64[m]")
+    out = {}
+    for hour in config.HOURS:
+        idx, days = _local_mornings(t, lon, step_h, hour)
+        out[hour] = {str(d): (str(np.datetime64(times[i], "h")), [v[i] for v in values]) for i, d in zip(idx, days)}
+    return out
 
 
 def _cdip(p):
@@ -154,11 +158,16 @@ def build():
     out = {}
     for p in pts:
         k = key(p)
-        w, v = waves.get(k, {}), wind.get(k, {})
-        rows = [[day, hour, *[None if not np.isfinite(x) else round(float(x), 2) for x in vals],
-                 *[None if not np.isfinite(x) else round(float(x), 1) for x in v.get(day, (None, [np.nan, np.nan]))[1]]]
-                for day, (hour, vals) in sorted(w.items())]
-        if rows:
-            out[k] = rows[:DAYS]
-    OUT.write_text(json.dumps(dict(generated=_now().isoformat() + "Z", sources=sources, points=out), separators=(",", ":")))
+        per = {}
+        for h in config.HOURS:
+            w, v = waves.get(k, {}).get(h, {}), wind.get(k, {}).get(h, {})
+            rows = [[day, utc, *[None if not np.isfinite(x) else round(float(x), 2) for x in vals],
+                     *[None if not np.isfinite(x) else round(float(x), 1) for x in v.get(day, (None, [np.nan, np.nan]))[1]]]
+                    for day, (utc, vals) in sorted(w.items())]
+            if rows:
+                per[str(h)] = rows[:DAYS]
+        if per:
+            out[k] = per
+    OUT.write_text(json.dumps(dict(generated=_now().isoformat() + "Z", sources=sources, hours=list(config.HOURS), points=out),
+                              separators=(",", ":")))
     print(f"forecast: {len(out)} of {len(pts)} breaks; waves from {sources}; wrote {OUT}", flush=True)

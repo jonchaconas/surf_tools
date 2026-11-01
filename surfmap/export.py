@@ -171,6 +171,21 @@ def _forecast_extras(e):
     return out
 
 
+def _point_records(points, hour):
+    """The marked spots' records (as in _points) sampled at another local hour, same order and layout."""
+    from . import points as P
+
+    counts, recs = [], []
+    for e in points:
+        m = P.mornings(e["lat"], e["lon"], hour)
+        for month in range(1, 13):
+            r = _records(P.season(m, (month,)), e["tide_m"]) if m is not None else np.zeros((0, len(MORNING)), np.uint8)
+            counts.append(len(r))
+            recs.append(r)
+    body = np.array(counts, np.uint16).tobytes() + np.concatenate(recs).tobytes()
+    return base64.b64encode(gzip.compress(body, 6)).decode("ascii")
+
+
 def _buoy_checks():
     """{(kind, name): its best buoy comparison (surfmap/buoys.py)}, for breaks and regional coasts:
     the pair with the most matched mornings among buoys within 40 km, else the nearest."""
@@ -216,7 +231,7 @@ def _points():
     checks = _buoy_checks()
     out, counts, recs = [], [], []
     for e in entries:
-        m = P.mornings(e["lat"], e["lon"])
+        m = P.mornings(e["lat"], e["lon"], config.LOCAL_HOUR)
         if m is None:
             print(f"  not downloaded yet, left out: {e['name']}", flush=True)
             continue
@@ -538,6 +553,12 @@ def export(res=2):
     (OUT / "grid.b64.txt").write_text(_pack(_hists(samples, range(len(cells))), len(cells)))
     points, pts = _points()
     (OUT / "points.b64.txt").write_text(pts)
+    for old in OUT.glob("points_*.b64.txt"):
+        old.unlink()
+    for hour in config.HOURS:  # the other times of day, loaded by the page when chosen
+        if hour != config.LOCAL_HOUR:
+            (OUT / f"points_{hour:02d}.b64.txt").write_text(_point_records(points, hour))
+            print(f"  spots at {hour:02d}:00", flush=True)
     (OUT / "land.json").write_text(json.dumps(_land(), separators=(",", ":")))
     (OUT / "places.json").write_text(json.dumps(_places(), separators=(",", ":"), ensure_ascii=False))
     tiles = _land_tiles()
@@ -564,6 +585,7 @@ def export(res=2):
     meta = dict(
         generated=date.today().isoformat(), res=res,
         seasons={m: list(config.seasons(m)) for m in range(1, 13)}, years=years, tiles=tiles, tile=TILE,
+        hour=config.LOCAL_HOUR, hours=list(config.HOURS),
         bins=dict(height_ft=H_BINS, period_s=T_BINS, period_start=5, clean=CLEAN),
         morning=[k for k, _ in MORNING], scale=[step for _, step in MORNING],
         offshore=config.OFFSHORE,
