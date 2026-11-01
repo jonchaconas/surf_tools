@@ -57,6 +57,20 @@ select { font: 14px var(--body); color: var(--ink); background: var(--panel); bo
 .check input { accent-color: var(--accent); }
 .sub { padding-left: 10px; border-left: 2px solid var(--rule); display: grid; gap: 8px; }
 .note { font-size: 12px; color: var(--muted); line-height: 1.45; }
+/* Two-handle range: two transparent range inputs over one drawn track; only the thumbs take the pointer. */
+.range2 { position: relative; height: 22px; }
+.range2 .track, .range2 .fill { position: absolute; top: 9px; height: 4px; border-radius: 2px; }
+.range2 .track { left: 9px; right: 9px; background: var(--rule); }
+.range2 .fill { background: var(--accent); }
+.range2 input { position: absolute; inset: 0; width: 100%; height: 22px; margin: 0; background: none; pointer-events: none;
+  -webkit-appearance: none; appearance: none; }
+.range2 input::-webkit-slider-runnable-track { height: 4px; background: none; border: 0; }
+.range2 input::-moz-range-track { height: 4px; background: none; border: 0; }
+.range2 input::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; pointer-events: auto; width: 18px; height: 18px;
+  margin-top: -7px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent); cursor: grab; }
+.range2 input::-moz-range-thumb { pointer-events: auto; width: 14px; height: 14px; border-radius: 50%; background: var(--accent);
+  border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent); cursor: grab; }
+.range2 input:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Section notes live behind an (i) by the heading: hover, or tap, to read. */
 section.block { position: relative; }
 .info { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 6px; padding: 0; vertical-align: 2px;
@@ -132,9 +146,13 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
       </section>
 
       <section class="block">
-        <h2>Years of data</h2>
-        <label class="row" for="yfrom">From <span class="val" id="yfromv"></span><input type="range" id="yfrom" step="1"></label>
-        <label class="row" for="yto">To <span class="val" id="ytov"></span><input type="range" id="yto" step="1"></label>
+        <h2>Years of data <span class="val" id="yearsv" style="text-transform:none;letter-spacing:0;margin-left:6px;color:var(--ink)"></span></h2>
+        <div class="range2" id="years">
+          <div class="track"></div><div class="fill" id="yearsfill"></div>
+          <input type="range" id="yfrom" step="1" aria-label="First year">
+          <input type="range" id="yto" step="1" aria-label="Last year">
+        </div>
+        <div class="legend-labels" style="margin-top:-4px"><span id="yearmin"></span><span id="yearmax"></span></div>
       </section>
 
       <section class="block">
@@ -362,7 +380,14 @@ function setupYears() {
   yr = { from: ys[0], to: ys.at(-1) };
   for (const el of [from, to]) { el.min = ys[0]; el.max = ys.at(-1); }
   from.value = yr.from; to.value = yr.to;
-  const show = () => { document.getElementById("yfromv").textContent = yr.from; document.getElementById("ytov").textContent = yr.to; };
+  document.getElementById("yearmin").textContent = ys[0]; document.getElementById("yearmax").textContent = ys.at(-1);
+  const show = () => {
+    document.getElementById("yearsv").textContent = yr.from === yr.to ? yr.from : `${yr.from}–${yr.to}`;
+    const f = v => (ys.length > 1 ? (v - ys[0]) / (ys.at(-1) - ys[0]) : 0), fill = document.getElementById("yearsfill");
+    fill.style.left = `calc(9px + (100% - 18px) * ${f(yr.from)})`;
+    fill.style.width = `calc((100% - 18px) * ${f(yr.to) - f(yr.from)})`;
+    from.style.zIndex = yr.from === ys.at(-1) ? 3 : 1;  // both handles at the end: keep the lower one reachable
+  };
   show();
   let wait;
   const changed = which => {

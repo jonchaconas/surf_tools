@@ -91,7 +91,7 @@ def _grid(stride):
                           rating.has_sea(hs, ws), ds.day.dt.year.values))
         print(f"  grid month {m}", flush=True)
     days = sum(v.sum(0) for _, _, v, _ in per_month)
-    keep = np.argwhere(days > 0.5 * days.max())
+    keep = np.argwhere(days > 0.1 * days.max())  # seasonal sea ice: rated over its open-water mornings
     cells = [dict(lat=float(lat[i]), lon=float(lon[j]), size=float(stride), kind="ocean", basin=None)
              for i, j in keep]
     where = [("ocean", int(i), int(j)) for i, j in keep]

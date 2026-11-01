@@ -36,6 +36,10 @@ BASINS = {
     "black_sea": (1.5, 40.9, 47.5, 27.0, 42.0),
     "caspian": (1.5, 36.5, 47.5, 46.5, 55.5),
     "mediterranean": (2.0, 30.0, 46.0, -5.6, 36.5),
+    # Seas the WW3 global run leaves out, from Copernicus only (cmems.fill).
+    "baltic": (1.0, 53.5, 66.0, 10.5, 30.5),
+    "red_sea": (1.0, 12.5, 30.0, 32.0, 43.6),
+    "persian_gulf": (1.0, 23.5, 30.5, 47.5, 56.6),
 }
 # North of 42N the Mediterranean box would take in the Bay of Biscay, so it starts at 0E there.
 ATLANTIC_CUT = box(-5.6, 42.0, 0.0, 46.0)

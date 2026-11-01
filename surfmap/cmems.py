@@ -33,13 +33,13 @@ OUT = config.DATA / "cmems"
 _WRITE = threading.Lock()  # HDF5 is not thread-safe: one netCDF write at a time
 
 
-def _missing():
-    """(path, [(lat, lon), ...], date window) for every inland/regional file not yet on disk."""
+def _missing(basins=None):
+    """(path, [(lat, lon), ...], date window) for every enclosed-sea file not yet on disk."""
     jobs = []
     for month in config.MONTHS:
         for year in config.seasons(month):
             d0, d1 = inland._window(year, month)
-            for name in inland.BASINS:
+            for name in basins or inland.BASINS:
                 lats, lons = inland.points(name)
                 for k, path in enumerate(inland._files(name, year, month)):
                     if not path.exists():
@@ -104,8 +104,8 @@ def _rows(points, d0, d1):
     return rows
 
 
-def fill(workers=4):
-    jobs = _missing()
+def fill(workers=4, basins=None):
+    jobs = _missing(basins)
     points = sorted({p for _, pts, _, _ in jobs for p in pts})
     OUT.mkdir(parents=True, exist_ok=True)
     print(f"Copernicus: {len(jobs)} files missing, {len(points)} points to fetch", flush=True)
