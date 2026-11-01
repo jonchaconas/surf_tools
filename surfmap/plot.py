@@ -513,19 +513,24 @@ def region_page(pdf, region, land):
 
 
 def build(output, preview_dir=None):
-    """Summary pages, the breakouts and regional pages, then one page per month in config.MONTHS."""
+    """Page order: year-round map, the popular-breaks and stretches breakouts, the half-year maps,
+    one map per month in config.MONTHS, then the regional pages."""
+    from .regions import REGIONS
+
     land = _land()
-    stretches_page = len(config.SUMMARIES) + 1
+    stretches_page = 3
 
     def maps(title, table, months):
         return lambda pdf: page(pdf, Period(months, title, table), land, stretches_page)
 
-    pages = [(title, maps(title, table, months)) for title, table, months in config.SUMMARIES]
-    pages += [("Under-the-radar stretches", stretch_page), ("Popular breaks", spot_page)]
-    from .regions import REGIONS
-    pages += [(region, lambda pdf, region=region: region_page(pdf, region, land)) for region in REGIONS]
+    (year, *halves) = config.SUMMARIES
+    pages = [(year[0], maps(*year))]
+    pages += [("Popular breaks", spot_page), ("Under-the-radar stretches", stretch_page)]
+    pages += [(title, maps(title, table, months)) for title, table, months in halves]
     pages += [(calendar.month_name[m], maps(calendar.month_name[m], f"Best named breaks in {calendar.month_name[m]}", (m,)))
               for m in config.MONTHS]
+    pages += [(region, lambda pdf, region=region: region_page(pdf, region, land)) for region in REGIONS]
+    assert pages[stretches_page - 1][0] == "Under-the-radar stretches"
     with PdfPages(output) as pdf:
         for n, (title, render) in enumerate(pages, 1):
             _save(render(pdf), preview_dir, n, title)
