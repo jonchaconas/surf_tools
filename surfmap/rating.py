@@ -25,6 +25,12 @@ def is_good(swell_hs, swell_tp, windsea_hs):
         )
 
 
+def has_sea(swell_hs, windsea_hs):
+    """Mornings the model has a sea state for. A blank swell partition alongside a wind sea
+    means "no swell" (a morning that isn't good), not missing data."""
+    return np.isfinite(swell_hs) | np.isfinite(windsea_hs)
+
+
 def exposed(swell_dir, facing):
     """True where swell arrives from within config.EXPOSURE degrees of the break's facing."""
     diff = np.abs((np.asarray(swell_dir) - facing + 180) % 360 - 180)

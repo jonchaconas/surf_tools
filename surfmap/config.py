@@ -7,6 +7,13 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 
 MONTHS = (11, 12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)  # page order: the year ahead from November
+
+# Summary pages ahead of the monthly ones: (page title, table title, months).
+SUMMARIES = (
+    ("October–March", "Best named breaks, October–March", (10, 11, 12, 1, 2, 3)),
+    ("April–September", "Best named breaks, April–September", (4, 5, 6, 7, 8, 9)),
+    ("Year-round", "Best named breaks year-round", tuple(range(1, 13))),
+)
 N_SEASONS = 5  # Open-Meteo only has swell partitions from Oct 2021, which caps the record
 
 

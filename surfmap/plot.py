@@ -16,7 +16,7 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 from shapely.ops import unary_union
 
 from . import config, inland, rating
-from .analysis import LAT, LON, Month
+from .analysis import LAT, LON, Period
 
 # Red (rarely good) through pale yellow (~the open-ocean median) to green (usually good).
 # The green end is much darker than the red end, so red-green colour-blind readers can
@@ -111,10 +111,10 @@ def _distinct(spots, n):
     return chosen
 
 
-def _table(fig, rect, spots, month_name):
+def _table(fig, rect, spots, title):
     ax = fig.add_axes(rect)
     ax.axis("off")
-    ax.text(0, 1, f"Best named breaks in {month_name}", fontsize=12, weight="bold", va="top")
+    ax.text(0, 1, title, fontsize=12, weight="bold", va="top")
     ax.text(0, 0.968, "% of mornings that are good+ with swell inside the break's\n"
             "exposure window; best break per 100 miles of coast",
             fontsize=8, color=INK_2, va="top", linespacing=1.3)
@@ -179,26 +179,16 @@ def _colorbar(fig, rect, mappable):
              fontsize=7.5, color=INK_2, va="center", linespacing=1.2)
 
 
-def _years_text(m):
-    days = m.days
-    years = sorted({d.year for d in days})
-    full = calendar.monthrange(years[-1], m.month)[1] * len(years)
-    span = f"{years[0]}–{years[-1]}"
-    gap = "" if len(days) == full else f"; {full - len(days)} days missing from the archive"
-    return f"{len(years)} seasons, {span} ({len(days)} mornings{gap})"
-
-
-def page(pdf, month, land):
-    m = Month(month)
+def page(pdf, m, land):
+    """Render one Period as a PDF page."""
     field, nodata = m.field()
     spots = m.spots()
-    name = calendar.month_name[month]
 
     fig = plt.figure(figsize=(17, 11))
     fig.patch.set_facecolor("white")
-    fig.text(0.02, 0.965, f"{name}: where the surf is good", fontsize=24, weight="bold", va="top")
+    fig.text(0.02, 0.965, f"{m.title}: where the surf is good", fontsize=24, weight="bold", va="top")
     fig.text(0.02, 0.925, f"Share of mornings with good-or-better surf in the wave-model record, "
-             f"{_years_text(m)}", fontsize=11.5, color=INK_2, va="top")
+             f"{m.describe()}", fontsize=11.5, color=INK_2, va="top")
 
     ax = fig.add_axes([0.015, 0.375, 0.73, 0.54], projection=ccrs.Robinson(central_longitude=10))
     ax.set_global()
@@ -210,10 +200,10 @@ def page(pdf, month, land):
                  "omitted where swell comes from mixed directions)", coordinates="figure",
                  labelpos="E", labelsep=0.08, fontproperties=dict(size=7.5), labelcolor=INK_2)
 
-    _table(fig, [0.77, 0.36, 0.215, 0.57], spots, name)
+    _table(fig, [0.77, 0.36, 0.215, 0.57], spots, m.table_title)
 
     for (title, basins, extent), rect in zip(INSETS, _inset_rects(fig, bottom=0.068, height=0.235)):
-        _inset(fig, rect, title, basins, extent, field, nodata, land, spots, m.basins)
+        _inset(fig, rect, title, basins, extent, field, nodata, land, spots, m.ready)
 
     fig.text(0.02, 0.045, rating.rule_text(), fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.028,
@@ -221,11 +211,10 @@ def page(pdf, month, land):
              "Great Lakes, Mediterranean, Black Sea, Caspian: Open-Meteo Marine API (Météo-France MFWAM), "
              "0.75° lakes / 1.5–2° seas. Both judged by the same open-ocean standard.",
              fontsize=7.5, color=INK_2, va="top")
-    ratio = next((b["tp_ratio"] for b in m.basins.values() if b["tp_ratio"]), None)
-    lakes = (f" Open-Meteo has no swell peak period on the Great Lakes; it is taken as {ratio:.2f}× the mean "
-             f"swell period, the median ratio in the other seas." if ratio else "")
-    if len(m.basins) < len(inland.BASINS):
-        lakes += (" Enclosed-sea data for this month is still downloading (Open-Meteo free-tier quota), "
+    lakes = (f" Open-Meteo has no swell peak period on the Great Lakes; it is taken as {m.tp_ratio:.2f}× the "
+             f"mean swell period, the median ratio in the other seas." if m.tp_ratio else "")
+    if len(m.ready) < len(inland.BASINS):
+        lakes += (" Enclosed-sea data for these months is still downloading (Open-Meteo free-tier quota), "
                   "so those seas show as no data until the PDF is rebuilt.")
     fig.text(0.02, 0.011,
              "Offshore sea state only: bathymetry, sheltering, tide and wind direction at each break are not modelled. "
@@ -236,12 +225,16 @@ def page(pdf, month, land):
 
 
 def build(output, preview_dir=None):
+    """Summary pages (config.SUMMARIES) first, then one page per month in config.MONTHS."""
     land = _land()
+    periods = [(title, table, months) for title, table, months in config.SUMMARIES]
+    periods += [(calendar.month_name[m], f"Best named breaks in {calendar.month_name[m]}", (m,))
+                for m in config.MONTHS]
     with PdfPages(output) as pdf:
-        for month in config.MONTHS:
-            fig = page(pdf, month, land)
+        for i, (title, table, months) in enumerate(periods, 1):
+            fig = page(pdf, Period(months, title, table), land)
             if preview_dir:
-                fig.savefig(f"{preview_dir}/page_{month:02d}.png", dpi=80)
+                fig.savefig(f"{preview_dir}/page_{i:02d}.png", dpi=80)
             plt.close(fig)
-            print(f"  page {calendar.month_name[month]}", flush=True)
+            print(f"  page {i}: {title}", flush=True)
     print(f"wrote {output}")
