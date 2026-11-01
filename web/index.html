@@ -73,11 +73,12 @@ select { font: 14px var(--body); color: var(--ink); background: var(--panel); bo
 .range2 input:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
 .search { position: relative; flex: 1 1 220px; max-width: 320px; }
 .search input { width: 100%; font: 14px var(--body); color: var(--ink); background: var(--panel); border: 1px solid var(--rule); border-radius: 4px; padding: 6px 8px; }
-#qres { position: absolute; z-index: 20; left: 0; right: 0; top: 34px; margin: 0; padding: 4px; list-style: none; background: var(--panel);
+#qres, .results { position: absolute; z-index: 20; left: 0; right: 0; top: 34px; margin: 0; padding: 4px; list-style: none; background: var(--panel);
   border: 1px solid var(--rule); border-radius: 6px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); max-height: 60vh; overflow: auto; }
-#qres button { width: 100%; text-align: left; display: grid; gap: 1px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font: 14px var(--body); cursor: pointer; }
-#qres button span { font-size: 12px; color: var(--muted); }
-#qres button:hover, #qres button[aria-selected="true"] { background: var(--water); }
+#qres button, .results button { width: 100%; text-align: left; display: grid; gap: 1px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); font: 14px var(--body); cursor: pointer; }
+#qres button span, .results button span { font-size: 12px; color: var(--muted); }
+#qres button:hover, #qres button[aria-selected="true"], .results button:hover { background: var(--water); }
+.results { list-style: none; margin: 0; padding: 4px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .week { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 3px; }
 .week div { display: grid; gap: 2px; justify-items: center; font: 10px var(--data); color: var(--muted); }
@@ -211,6 +212,18 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
         <p class="note">At the marked breaks, either swell train can make a morning good, and the wind setting uses ERA5 morning wind just offshore; wind from the land (within 45° of straight offshore) always counts as clean. Out at sea and in the coloured coastal band, the chop setting judges the wave model's wind sea instead.</p>
         <p class="note">Along the coast, each morning counts by how open the shore is to that morning's swell direction: the share of sight lines from that direction with 200 km of open water (100 km in lakes and enclosed seas). Bays and headlands block what they face; islands under 1,000 km² only half-block, since swell wraps around them.</p>
         <p class="note">Each day is judged on one model snapshot near 08:00 local time. Heights are the swell's significant height in feet; in the Great Lakes, Mediterranean, Black Sea and Caspian (and their regional coasts) total waves are used instead, and neither wind nor chop applies there.</p>
+      </section>
+
+      <section class="block" id="tripsec">
+        <h2>Plan a trip</h2>
+        <div class="search" style="max-width:none">
+          <input id="tripq" type="search" placeholder="Starting from a town or spot" autocomplete="off" aria-label="Trip starting point">
+          <ul id="tripres" class="results" hidden></ul>
+        </div>
+        <div class="actions"><button class="mini" id="tripcentre">Use the map's centre</button><button class="mini" id="tripclear" hidden>Clear</button></div>
+        <label class="row" for="tripkm">Within <span class="val" id="tripkmv"></span><input type="range" id="tripkm" min="0" max="100" step="1" value="59"></label>
+        <ol class="top" id="trip"></ol>
+        <p class="note">Ranks the marked breaks and OpenStreetMap surf spots within reach by your criteria, for the months and years chosen, one per 25 km. Water temperature and wetsuit are for the coldest of those months.</p>
       </section>
 
       <section class="block" id="weeksec" hidden>
@@ -515,6 +528,69 @@ function weekCells(i) {  // the forecast strip in a break's panel
       `<b class="${t ? "good" : ""}"></b><span class="v">${(t || any) ? Math.round((t || any)[0]) + " ft" : "–"}<br>${(t || any) ? Math.round((t || any)[1]) + " s" : ""}</span></div>`;
   }).join("") + `</div>`;
 }
+// ---------- plan a trip: the best spots within reach of a starting point ----------
+let trip = null;  // { name, lat, lon }
+const tripKm = () => Math.round((100 * Math.pow(50, +document.getElementById("tripkm").value / 100)) / 10) * 10;  // 100-5,000 km
+function waterShort(sst) {
+  const t = sst && period.months.map(m => sst[m - 1]).filter(isFinite);
+  if (!t || !t.length) return "";
+  const lo = Math.min(...t);
+  return ` · water ${Math.round(lo)} °C, ${SUITS.find(([f]) => lo >= f)[1]}`;
+}
+function renderTrip() {
+  const list = document.getElementById("trip");
+  document.getElementById("tripclear").hidden = !trip;
+  document.getElementById("tripkmv").textContent = `${tripKm().toLocaleString()} km`;
+  if (!trip || !pointPct) { list.innerHTML = `<li class="detail-empty">Pick where you're starting from.</li>`; list.rows = []; return; }
+  const reach = tripKm(), rows = [];
+  meta.points.forEach((p, i) => { const d = km(trip, p); if (d <= reach && isFinite(pointPct[i])) rows.push({ i, name: p.name, lat: p.lat, lon: p.lon, d, v: pointPct[i], sst: p.sst }); });
+  osm.forEach(o => { const d = km(trip, o); if (d > reach) return; const v = osmPct(o); if (isFinite(v)) rows.push({ o, name: o.name, lat: o.lat, lon: o.lon, d, v, sst: o.sst }); });
+  rows.sort((a, b) => b.v - a.v);
+  // Marked breaks are judged by the full rule (wind included); OpenStreetMap spots only by the map's
+  // colours, which have no wind test, so they're listed apart rather than ranked together.
+  const pick = (from, n) => { const out = []; for (const r of from) { if (out.every(c => km(c, r) >= 25)) out.push(r); if (out.length === n) break; } return out; };
+  const marked = pick(rows.filter(r => r.i !== undefined), 10), mapped = pick(rows.filter(r => r.o), 6);
+  list.rows = [...marked, ...mapped];
+  const row = (r, n) => `<li><button data-t="${n}"><span class="rank">${r.i !== undefined ? n + 1 : "·"}</span><span class="nm"><span class="swatch" style="background:${colorFor(r.v)}"></span>${esc(r.name)}` +
+    `<span class="rg">${Math.round(r.d).toLocaleString()} km · ${r.i !== undefined ? pointTypical(r.i, period.months) : "map estimate, no wind test"}${waterShort(r.sst)}</span></span><span class="pc">${Math.round(r.v)}%</span></button></li>`;
+  list.innerHTML = (marked.length ? marked.map(row).join("") : `<li class="detail-empty">No marked break within ${reach.toLocaleString()} km rates by these criteria.</li>`) +
+    (mapped.length ? `<li class="note" style="margin:6px 0 2px">Other mapped surf spots (OpenStreetMap)</li>` + mapped.map((r, n) => row(r, marked.length + n)).join("") : "");
+}
+function setTrip(t, zoomIn = true) {
+  trip = t; renderTrip(); draw(); saveState();
+  if (!t || !zoomIn) return;
+  const base = (tripKm() / 111.2) * (worldW / 360), k = Math.max(1, Math.min(40, (0.8 * Math.min(W, H)) / (2 * base)));
+  zoomTo(t.lon, t.lat, k);
+}
+document.getElementById("tripkm").addEventListener("input", () => { renderTrip(); draw(); saveState(); });
+document.getElementById("tripclear").onclick = () => { document.getElementById("tripq").value = ""; setTrip(null); };
+document.getElementById("tripcentre").onclick = () => {
+  const cx = (W / 2 - transform.x) / transform.k, cy = (H / 2 - transform.y) / transform.k;
+  const lon = ((((lonAt(cx) + 180) % 360) + 360) % 360) - 180, lat = latAt(cy), t = nearestPlace(lat, lon);
+  document.getElementById("tripq").value = t ? `near ${t.name}` : latlon(lat, lon);
+  setTrip({ name: t ? t.name : latlon(lat, lon), lat, lon }, false);
+};
+const tripQ = document.getElementById("tripq"), tripRes = document.getElementById("tripres");
+let tripHits = [];
+tripQ.addEventListener("input", () => {
+  const t = norm(tripQ.value.trim());
+  tripHits = t.length < 2 ? [] : searchIndex.filter(e => e.key.includes(t))
+    .sort((a, b) => (b.key.startsWith(t) - a.key.startsWith(t)) || b.rank - a.rank || a.name.length - b.name.length).slice(0, 8);
+  tripRes.hidden = !tripHits.length;
+  tripRes.innerHTML = tripHits.map((e, n) => `<li><button data-n="${n}">${esc(e.name)}<span>${esc(e.sub)}</span></button></li>`).join("");
+});
+tripQ.addEventListener("keydown", e => { if (e.key === "Enter" && tripHits.length) tripRes.querySelector("button").click(); if (e.key === "Escape") tripRes.hidden = true; });
+tripRes.addEventListener("click", e => {
+  const b = e.target.closest("button[data-n]"); if (!b) return;
+  const h = tripHits[+b.dataset.n]; tripQ.value = h.name; tripRes.hidden = true; setTrip({ name: h.name, lat: h.lat, lon: h.lon });
+});
+document.addEventListener("click", e => { if (!e.target.closest("#tripsec .search")) tripRes.hidden = true; });
+document.getElementById("trip").addEventListener("click", e => {
+  const b = e.target.closest("button[data-t]"); if (!b) return;
+  const r = document.getElementById("trip").rows[+b.dataset.t];
+  select(r.i !== undefined ? { type: "point", i: r.i } : { ...nearestBeach(r.lon, r.lat), name: r.name, osm: true, lat: r.lat, lon: r.lon });
+  zoomTo(r.lon, r.lat, Math.max(transform.k, 8));
+});
 function renderWeek() {  // the marked spots in view with the most good mornings coming
   const sec = document.getElementById("weeksec");
   sec.hidden = !forecast;
@@ -552,7 +628,7 @@ function recompute() {
   for (let e = 0; e < grid.n; e++) cellPct[e] = share(grid, lut.g, e, period.months);
   pointPct = new Float32Array(pts.n);
   for (let e = 0; e < pts.n; e++) pointPct[e] = pointShare(e, period.months);
-  computeField(); findUncharted(); draw(); renderTop(); renderDetail(); renderMine(); renderCompare(); renderWeek(); saveState();
+  computeField(); findUncharted(); draw(); renderTop(); renderDetail(); renderMine(); renderCompare(); renderWeek(); renderTrip(); saveState();
 }
 
 // ---------- uncharted coast: rates well by the current criteria, far from every charted spot ----------
@@ -863,6 +939,10 @@ function draw() {
           ctx.strokeText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); ctx.fillText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); });
       }
     }
+    if (trip) {  // the trip's reach
+      ctx.beginPath(); path(d3.geoCircle().center([trip.lon, trip.lat]).radius(tripKm() / 111.2)());
+      ctx.setLineDash([6 / k, 4 / k]); ctx.strokeStyle = css("--accent"); ctx.lineWidth = 1.5 / k; ctx.stroke(); ctx.setLineDash([]);
+    }
     if (selected) {
       const xy = selected.type === "point" ? pointXY[selected.i] : projection([selected.lon, selected.lat]);
       if (xy) {
@@ -1141,6 +1221,7 @@ function stateParams() {
   }
   const key = keyOf(selected); if (key) q.set("s", key);
   if (compare.length) q.set("cmp", compare.join("|"));
+  if (trip) q.set("trip", [trip.lat.toFixed(3), trip.lon.toFixed(3), document.getElementById("tripkm").value, trip.name.replace(/[,|]/g, " ")].join(","));
   return q;
 }
 let saveWait;
@@ -1163,6 +1244,11 @@ function loadState() {  // before the first draw; returns what has to wait for t
   if (y.length === 2 && y.every(isFinite)) setYears(y[0], y[1]);
   if (q.has("f")) { minPct = +q.get("f") || 0; document.getElementById("minpct").value = minPct; document.getElementById("minpctv").textContent = minPct ? `${minPct}%` : "any"; }
   compare = (q.get("cmp") || "").split("|").filter(Boolean).slice(0, 3);
+  const t = (q.get("trip") || "").split(",");
+  if (t.length >= 4 && isFinite(+t[0]) && isFinite(+t[1])) {
+    document.getElementById("tripkm").value = +t[2] || 59; trip = { lat: +t[0], lon: +t[1], name: t.slice(3).join(",") };
+    document.getElementById("tripq").value = trip.name;
+  }
   return { view: q.get("v"), sel: q.get("s") };
 }
 function applyView(view, sel) {

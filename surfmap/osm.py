@@ -12,7 +12,8 @@ from . import config
 OVERPASS = "https://overpass-api.de/api/interpreter"
 QUERY = '[out:json][timeout:300];(node["sport"="surfing"];way["sport"="surfing"];relation["sport"="surfing"];);out center tags;'
 PATH = config.DATA / "osm" / "surfing.json"
-NOT_A_SPOT = re.compile(r"shop|store|school|schule|escuela|[ée]cole|scuola|club|rental|hire|hostel|camp|academy|lesson", re.I)
+NOT_A_SPOT = re.compile(r"shop|store|school|schule|escuela|[ée]cole|scuola|club|rental|hire|hostel|camp|academy|lesson|"
+                        r"cent(er|re)|centro|lodge|resort|hotel|house|park|pool", re.I)
 SEA_KM = 10  # spots further than this from the sea are river or lake waves
 
 
