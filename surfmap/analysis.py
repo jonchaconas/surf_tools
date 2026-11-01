@@ -19,6 +19,7 @@ from shapely.ops import unary_union
 
 from . import config, inland, rating, ww3
 from .spots import SPOTS
+from .stretches import STRETCHES
 
 RES = 0.25
 LAT = np.arange(-90 + RES / 2, 90, RES)
@@ -103,6 +104,7 @@ class Counts:
     v: np.ndarray
     w: np.ndarray         # total weight
     spots: dict           # spot name -> (good, n)
+    stretches: dict       # stretch name -> dict(good, n) plus breaker height, period, direction of good mornings
     basins: dict          # complete Open-Meteo basins -> dict(lat, lon, good, n) per point
     detail: dict          # downloaded ww3.DETAIL boxes -> dict(lat, lon, good, n) at 0.5 degrees
     tp_ratio: float | None
@@ -139,6 +141,7 @@ def month_counts(month):
         good=globe.counts(ds)["good"], n=globe.counts(ds)["n"],
         u=np.nansum(w * np.sin(heading), 0), v=np.nansum(w * np.cos(heading), 0), w=w.sum(0),
         spots=_spot_counts(globe, {r: g for r, (_, g) in details.items()}, basins),
+        stretches=_stretch_counts(globe),
         basins={k: dict(lat=b["lat"], lon=b["lon"], n=rating.has_sea(b["hs"], b["ws"]).sum(1),
                         good=rating.is_good(b["hs"], b["tp"], b["ws"]).sum(1))
                 for k, b in basins.items()},
@@ -176,6 +179,28 @@ def _spot_counts(globe, details, basins):
         good = rating.is_good(h, t, w) & rating.exposed(d, facing)
         out[name] = (int(good.sum()), int(rating.has_sea(h, w).sum()))
     return out
+
+
+def _stretch_counts(globe):
+    """Each discovered stretch, read from the exact 1 degree cell discover.py chose for it."""
+    out = {}
+    for name, _, _, _, facing, (clat, clon) in STRETCHES:
+        k = int(np.argmin(np.abs(globe.lat - clat) + np.abs(globe.lon - clon)))
+        if abs(globe.lat[k] - clat) + abs(globe.lon[k] - clon) > 0.01:  # cell blank this month
+            continue
+        i, j = globe.cells[k]
+        h, t, d, w = globe.hs[:, i, j], globe.tp[:, i, j], globe.frm[:, i, j], globe.ws[:, i, j]
+        good = rating.is_good(h, t, w) & rating.exposed(d, facing)
+        out[name] = dict(good=int(good.sum()), n=int(rating.has_sea(h, w).sum()),
+                         hb=rating.breaker_height(h[good], t[good]), tp=t[good], dir=d[good])
+    return out
+
+
+def _circmean(deg):
+    if not len(deg):
+        return np.nan
+    r = np.radians(deg)
+    return np.degrees(np.arctan2(np.sin(r).mean(), np.cos(r).mean())) % 360
 
 
 class Period:
@@ -252,6 +277,20 @@ class Period:
             rows.append(dict(name=name, region=region, lat=lat, lon=lon, basin=basin,
                              pct=100 * good / max(n, 1), days=n))
         return sorted(rows, key=lambda r: -r["pct"])
+
+    def stretches(self):
+        """Per discovered stretch, numbered as in stretches.py: % good+ and its median good morning."""
+        rows = []
+        for num, (name, region, lat, lon, _, _) in enumerate(STRETCHES, 1):
+            per = [c.stretches.get(name) for c in self.counts]
+            if None in per:
+                continue
+            good, n = sum(p["good"] for p in per), sum(p["n"] for p in per)
+            hb, tp, dr = (np.concatenate([p[k] for p in per]) for k in ("hb", "tp", "dir"))
+            rows.append(dict(num=num, name=name, region=region, lat=lat, lon=lon, pct=100 * good / max(n, 1),
+                             hb=np.median(hb) if len(hb) else np.nan,
+                             tp=np.median(tp) if len(tp) else np.nan, dir=_circmean(dr)))
+        return rows
 
     def swell_arrows(self, step=10, min_consistency=0.3):
         """Predominant swell heading on a coarse open-ocean grid: (lon, lat, u, v) unit vectors.

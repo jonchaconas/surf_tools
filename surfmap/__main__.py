@@ -3,6 +3,7 @@
     uv run python -m surfmap fetch            # both sources (cached in data/)
     uv run python -m surfmap fetch --source inland
     uv run python -m surfmap build            # writes surf_good_days.pdf
+    uv run python -m surfmap discover         # rewrites surfmap/stretches.py
 """
 
 import argparse
@@ -18,6 +19,7 @@ def main():
     f.add_argument("--source", choices=("all", "ww3", "inland"), default="all")
     b = sub.add_parser("build", help="render one PDF page per month")
     b.add_argument("-o", "--output", default=str(config.ROOT / "surf_good_days.pdf"))
+    sub.add_parser("discover", help="rewrite stretches.py: good coast far from the known breaks")
     args = p.parse_args()
 
     if args.cmd == "fetch":
@@ -26,6 +28,9 @@ def main():
             ww3.fetch()
         if args.source in ("all", "inland"):
             inland.fetch()
+    elif args.cmd == "discover":
+        from . import discover
+        discover.write(discover.find())
     else:
         from . import plot
         plot.build(args.output)

@@ -1,13 +1,29 @@
 # surf-forecast-tools
 
 Maps of how often the surf is good around the world, built from wave-model history.
-`surf_good_days.pdf` has one page per month, November through October. Each page has:
+`surf_good_days.pdf` opens with three summary pages (October–March, April–September,
+year-round) and a month-by-month breakout of under-the-radar stretches. It then has one
+page per month, November through October. Each map page has:
 
 - a world map with filled contours of the share of mornings that were good-or-better
   (good+), from red (rarely) to green (usually), plus arrows showing the predominant
   swell direction
 - insets for the Great Lakes, the Mediterranean and Black Sea, and the Caspian
-- a ranked table of named breaks
+- a ranked table of named breaks (the best one per 100 miles of coast)
+- numbered ◆ markers and a short table for under-the-radar stretches
+
+## Under-the-radar stretches
+
+[`surfmap/discover.py`](surfmap/discover.py) scans every coastal model cell for stretches
+that meet all of these:
+
+- often good+ with swell aimed at the shore: at least 40% of mornings year-round, or
+  65% across their best three months;
+- at least 300 km from every well-known break in [`surfmap/spots.py`](surfmap/spots.py);
+- within 150 km of a town of 5,000 or more.
+
+Where qualifying stretches are less than 200 km apart, only the best is kept. The result
+is written to [`surfmap/stretches.py`](surfmap/stretches.py).
 
 ## What counts as good+
 
@@ -46,6 +62,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 ```sh
 uv run python -m surfmap fetch    # downloads into data/ (cached, resumable)
 uv run python -m surfmap build    # writes surf_good_days.pdf
+uv run python -m surfmap discover # rewrites surfmap/stretches.py from the downloaded data
 ```
 
 The WW3 download is about 1.7 GB for all twelve months.

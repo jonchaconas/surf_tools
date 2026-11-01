@@ -65,6 +65,9 @@ SPOTS = [
 ("Margaret River","Western Australia",-33.970,114.990,270),
 ("Raglan","New Zealand",-37.810,174.820,270),("Piha","New Zealand",-36.950,174.460,270),
 ("Gisborne","New Zealand",-38.680,178.030,140),("St Clair","Dunedin, New Zealand",-45.910,170.490,160),
+("Cimaja","Pelabuhan Ratu, West Java",-6.990,106.470,210),("Krui","Lampung, Sumatra",-5.190,103.930,225),
+("Lhoknga","Aceh, Sumatra",5.470,95.240,270),("Cactus Beach","South Australia",-32.080,132.980,210),
+("Iquique","Chile",-20.220,-70.160,270),
 # Enclosed seas, covered by Open-Meteo rather than WW3.
 ("Sheboygan","Lake Michigan, Wisconsin",43.745,-87.700,90),("Grand Haven","Lake Michigan, Michigan",43.060,-86.250,270),
 ("Stoney Point","Lake Superior, Minnesota",46.930,-91.820,135),("Marquette","Lake Superior, Michigan",46.540,-87.380,30),
