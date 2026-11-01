@@ -37,13 +37,21 @@ def exposed(swell_dir, facing):
     return diff <= config.EXPOSURE
 
 
-def swell_ok(hs, tp, swell_dir, facing):
+def in_window(swell_dir, window):
+    """True where swell comes from inside a (first, last) window of degrees, clockwise (may wrap past N)."""
+    d, (a, b) = np.asarray(swell_dir) % 360, window
+    return (d >= a) & (d <= b) if a <= b else (d >= a) | (d <= b)
+
+
+def swell_ok(hs, tp, swell_dir, facing, window=None):
     """One swell partition that would make a break good+: big enough for its period, breaking under
-    MAX_BREAKER, and arriving within EXPOSURE degrees of the facing."""
+    MAX_BREAKER, and arriving inside the break's swell window (spots.WINDOWS) or, without one, within
+    EXPOSURE degrees of the facing."""
     with np.errstate(invalid="ignore"):
+        aimed = in_window(swell_dir, window) if window else exposed(swell_dir, facing)
         return ((((tp > config.MIN_SWELL_PERIOD) & (hs >= config.MIN_SWELL_HEIGHT))
                  | ((tp > config.LONG_SWELL_PERIOD) & (hs >= config.LONG_SWELL_HEIGHT)))
-                & (breaker_height(hs, tp) <= config.MAX_BREAKER) & exposed(swell_dir, facing))
+                & (breaker_height(hs, tp) <= config.MAX_BREAKER) & aimed)
 
 
 def wind_ok(kt, wind_from, facing, max_kt=config.MAX_WIND_KT):
@@ -53,17 +61,17 @@ def wind_ok(kt, wind_from, facing, max_kt=config.MAX_WIND_KT):
         return (np.asarray(kt) <= max_kt) | offshore
 
 
-def break_good(m, facing, max_kt=config.MAX_WIND_KT):
+def break_good(m, facing, max_kt=config.MAX_WIND_KT, window=None):
     """Good+ at a break, from points.mornings(): either swell partition passes swell_ok (so a
     groundswell under a local windswell still counts) and the morning wind is clean."""
-    return (swell_ok(m["hs1"], m["tp1"], m["dir1"], facing) | swell_ok(m["hs2"], m["tp2"], m["dir2"], facing)) \
+    return (swell_ok(m["hs1"], m["tp1"], m["dir1"], facing, window) | swell_ok(m["hs2"], m["tp2"], m["dir2"], facing, window)) \
         & wind_ok(m["kt"], m["wind_from"], facing, max_kt)
 
 
-def good_swell(m, facing):
+def good_swell(m, facing, window=None):
     """(hs, tp, dir) of the partition that made each morning good: the bigger one if both did."""
-    ok1 = swell_ok(m["hs1"], m["tp1"], m["dir1"], facing)
-    ok2 = swell_ok(m["hs2"], m["tp2"], m["dir2"], facing)
+    ok1 = swell_ok(m["hs1"], m["tp1"], m["dir1"], facing, window)
+    ok2 = swell_ok(m["hs2"], m["tp2"], m["dir2"], facing, window)
     use2 = ok2 & (~ok1 | (np.nan_to_num(m["hs2"]) > np.nan_to_num(m["hs1"])))
     return tuple(np.where(use2, m[f"{v}2"], m[f"{v}1"]) for v in ("hs", "tp", "dir"))
 

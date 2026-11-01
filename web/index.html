@@ -79,6 +79,11 @@ select { font: 14px var(--body); color: var(--ink); background: var(--panel); bo
 #qres button span { font-size: 12px; color: var(--muted); }
 #qres button:hover, #qres button[aria-selected="true"] { background: var(--water); }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.week { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 3px; }
+.week div { display: grid; gap: 2px; justify-items: center; font: 10px var(--data); color: var(--muted); }
+.week b { display: block; width: 100%; height: 18px; border-radius: 3px; background: var(--rule); }
+.week b.good { background: #1a9850; }
+.week span.v { color: var(--ink); font-size: 10px; text-align: center; line-height: 1.2; }
 .mini { font: 600 12px var(--body); border: 1px solid var(--rule); background: transparent; color: var(--ink); border-radius: 4px; padding: 4px 8px; cursor: pointer; }
 .mini[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .cmpgrid { display: grid; gap: 12px; }
@@ -195,9 +200,23 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
         <label class="row" for="wind">Breaks: morning wind up to <span class="val" id="windv"></span><input type="range" id="wind" min="2" max="31" step="1"></label>
         <label class="row" for="angle">Breaks: swell angle off their facing, up to <span class="val" id="anglev"></span><input type="range" id="angle" min="15" max="95" step="5"></label>
         <label class="row" for="clean">Out at sea: wind chop up to <span class="val" id="cleanv"></span><input type="range" id="clean" min="0" max="5" step="1"></label>
+        <div class="row" style="display:grid;grid-template-columns:1fr auto;font-size:13px">Breaks: tide <span class="val" id="tidev"></span></div>
+        <div class="range2" id="tides">
+          <div class="track"></div><div class="fill" id="tidesfill"></div>
+          <input type="range" id="tlo" min="0" max="100" step="5" aria-label="Lowest tide">
+          <input type="range" id="thi" min="0" max="100" step="5" aria-label="Highest tide">
+        </div>
+        <div class="legend-labels" style="margin-top:-4px"><span>low</span><span>mid</span><span>high</span></div>
+        <p class="note">Tide at the breaks is each morning's level within that break's own range (EOT20 tide model): 0% is a low tide, 100% a high one. Breaks with a known swell window (Pipeline, Uluwatu, Jeffreys Bay…) use it instead of the angle setting.</p>
         <p class="note">At the marked breaks, either swell train can make a morning good, and the wind setting uses ERA5 morning wind just offshore; wind from the land (within 45° of straight offshore) always counts as clean. Out at sea and in the coloured coastal band, the chop setting judges the wave model's wind sea instead.</p>
         <p class="note">Along the coast, each morning counts by how open the shore is to that morning's swell direction: the share of sight lines from that direction with 200 km of open water (100 km in lakes and enclosed seas). Bays and headlands block what they face; islands under 1,000 km² only half-block, since swell wraps around them.</p>
         <p class="note">Each day is judged on one model snapshot near 08:00 local time. Heights are the swell's significant height in feet; in the Great Lakes, Mediterranean, Black Sea and Caspian (and their regional coasts) total waves are used instead, and neither wind nor chop applies there.</p>
+      </section>
+
+      <section class="block" id="weeksec" hidden>
+        <h2>This week <span id="weektitle" style="text-transform:none;letter-spacing:0;font-family:var(--body);font-weight:400;font-size:13px"></span></h2>
+        <ol class="top" id="week"></ol>
+        <p class="note">The coming mornings by your criteria, from the latest forecast: CDIP's nearshore forecast in California, Copernicus Marine's (or Open-Meteo's) wave forecast elsewhere, Open-Meteo wind and the EOT20 tide. Refreshed daily; forecast skill fades after 3–5 days.</p>
       </section>
 
       <section class="block" id="minesec" hidden>
@@ -255,12 +274,12 @@ const PERIODS = [
   ...MONTHS.map((m, i) => ({ id: m.toLowerCase(), label: m, months: [i + 1] })),
 ];
 const PRESETS = [
-  { name: "Jon's Criteria: 4 ft over 9 s, or 3 ft over 14 s, light wind", h1: 4, t1: 9, longOn: true, h2: 3, t2: 14, maxb: 16, clean: 1, wind: 8, angle: 75 },
-  { name: "Small groundswell: 2 ft at 12 s, light wind", h1: 2, t1: 12, longOn: false, h2: 2, t2: 14, maxb: 10, clean: 2, wind: 8, angle: 75 },
-  { name: "Longboard: 2 ft at 7 s, glassy", h1: 2, t1: 7, longOn: false, h2: 2, t2: 14, maxb: 6, clean: 1, wind: 6, angle: 90 },
-  { name: "Shortboard: 3 ft at 10 s", h1: 3, t1: 10, longOn: true, h2: 2, t2: 14, maxb: 10, clean: 2, wind: 10, angle: 75 },
-  { name: "Big days: 10 ft at 13 s", h1: 10, t1: 13, longOn: false, h2: 8, t2: 16, maxb: 41, clean: 3, wind: 12, angle: 75 },
-  { name: "Lake and sea: 4 ft at 6 s", h1: 4, t1: 6, longOn: false, h2: 3, t2: 14, maxb: 10, clean: 5, wind: 31, angle: 75 },
+  { name: "Jon's Criteria: 4 ft over 9 s, or 3 ft over 14 s, light wind", h1: 4, t1: 9, longOn: true, h2: 3, t2: 14, maxb: 16, clean: 1, wind: 8, angle: 75, tlo: 0, thi: 100 },
+  { name: "Small groundswell: 2 ft at 12 s, light wind", h1: 2, t1: 12, longOn: false, h2: 2, t2: 14, maxb: 10, clean: 2, wind: 8, angle: 75, tlo: 0, thi: 100 },
+  { name: "Longboard: 2 ft at 7 s, glassy", h1: 2, t1: 7, longOn: false, h2: 2, t2: 14, maxb: 6, clean: 1, wind: 6, angle: 90, tlo: 0, thi: 100 },
+  { name: "Shortboard: 3 ft at 10 s", h1: 3, t1: 10, longOn: true, h2: 2, t2: 14, maxb: 10, clean: 2, wind: 10, angle: 75, tlo: 0, thi: 100 },
+  { name: "Big days: 10 ft at 13 s", h1: 10, t1: 13, longOn: false, h2: 8, t2: 16, maxb: 41, clean: 3, wind: 12, angle: 75, tlo: 0, thi: 100 },
+  { name: "Lake and sea: 4 ft at 6 s", h1: 4, t1: 6, longOn: false, h2: 3, t2: 14, maxb: 10, clean: 5, wind: 31, angle: 75, tlo: 0, thi: 100 },
 ];
 const crit = { ...PRESETS[0] };
 let period = PERIODS[0];
@@ -346,21 +365,28 @@ function train(r, o, k) {  // swell train k (0, 1) or all waves (2) at record of
   const [hs, tp, dir] = meta.scale;
   return [h * hs * FT, r[o + 3 * k + 1] * tp, r[o + 3 * k + 2] * dir];
 }
-function trainOk(t, facing) {
+const inWindow = (from, [a, b]) => (a <= b ? from >= a && from <= b : from >= a || from <= b);
+function trainOk(t, p) {
   if (!t) return false;
   const [hft, tp, from] = t;
   return ((hft >= crit.h1 && tp >= crit.t1) || (crit.longOn && hft >= crit.h2 && tp >= crit.t2))
-    && (crit.maxb > 40 || breaking(hft, tp) <= crit.maxb) && (crit.angle > 90 || angleOff(from, facing) <= crit.angle);
+    && (crit.maxb > 40 || breaking(hft, tp) <= crit.maxb)
+    && (p.window ? inWindow(from, p.window) : crit.angle > 90 || angleOff(from, p.facing) <= crit.angle);
 }
 function windOk(r, o, facing) {  // light, or blowing from the land
   const kt = r[o + 9];
   if (crit.wind > 30 || kt === 255) return true;
   return kt * meta.scale[9] <= crit.wind || angleOff(r[o + 10] * meta.scale[10], facing + 180) <= meta.offshore;
 }
+function tideOk(r, o) {
+  const t = r[o + pts.tide];
+  return t === 255 || (crit.tlo <= 0 && crit.thi >= 100) || (t >= crit.tlo && t <= crit.thi);
+}
 function goodTrain(p, r, o) {  // the train that makes this morning good (the bigger if both), or null
-  if (p.measure === "waves") { const t = train(r, o, 2); return trainOk(t, p.facing) ? t : null; }  // no wind test
+  if (!tideOk(r, o)) return null;
+  if (p.measure === "waves") { const t = train(r, o, 2); return trainOk(t, p) ? t : null; }  // no wind test
   if (!windOk(r, o, p.facing)) return null;
-  const a = train(r, o, 0), b = train(r, o, 1), okA = trainOk(a, p.facing), okB = trainOk(b, p.facing);
+  const a = train(r, o, 0), b = train(r, o, 1), okA = trainOk(a, p), okB = trainOk(b, p);
   return okA && okB ? (b[0] > a[0] ? b : a) : okA ? a : okB ? b : null;
 }
 function eachMorning(e, months, visit) {  // the point's mornings in these months and the chosen years
@@ -447,6 +473,70 @@ function pointTypical(e, months) {
   });
   return hs.length ? `${Math.round(d3.median(hs))} ft @ ${Math.round(d3.median(ts))} s from ${P16[d3.maxIndex(from)]}` : "–";
 }
+// ---------- this week: the forecast's mornings, judged by the same rule ----------
+let forecast = null;  // { generated, rows: Map(point index -> [{ day, hour, rec: Uint8Array }]) }
+const TIDE_SPEEDS = { M2: 28.9841042, S2: 30.0, N2: 28.4397295, K1: 15.0410686, O1: 13.9430356 };
+const TIDE_ARGS = { M2: [2, -2, 2, 0, 0], S2: [2, 0, 0, 0, 0], N2: [2, -3, 2, 1, 0], K1: [1, 0, 1, 0, 90], O1: [1, -2, 1, 0, -90] };
+function tideHeight(tc, utc) {  // as surfmap/tides.py: EOT20 constituents with astronomical arguments and nodal corrections
+  const t = new Date(utc + ":00:00Z"), d = (t - Date.UTC(2000, 0, 1, 12)) / 86400000, hours = t.getUTCHours() + t.getUTCMinutes() / 60;
+  const s = 218.3165 + 13.17639648 * d, h = 280.4661 + 0.98564736 * d, pp = 83.3535 + 0.11140353 * d, n = 125.0445 - 0.05295377 * d;
+  const rad = Math.PI / 180, cn = Math.cos(n * rad), sn = Math.sin(n * rad);
+  const nodal = { M2: [1 - 0.037 * cn, -2.1 * sn], N2: [1 - 0.037 * cn, -2.1 * sn], K1: [1.006 + 0.115 * cn, -8.9 * sn], O1: [1.009 + 0.187 * cn, 10.8 * sn], S2: [1, 0] };
+  let out = 0;
+  for (const [c, [amp, phase]] of Object.entries(tc)) {
+    const [a, b, cc, dd, e] = TIDE_ARGS[c], [f, u] = nodal[c];
+    out += f * amp * Math.cos((a * 15 * hours + b * s + cc * h + dd * pp + e + u - phase) * rad);
+  }
+  return out;
+}
+function setupForecast(fc) {
+  if (!fc || !fc.points) return;
+  const index = new Map(meta.points.map((p, i) => [`${p.name}@${p.lat},${p.lon}`, i])), rows = new Map(), w = meta.morning.length;
+  for (const [key, list] of Object.entries(fc.points)) {
+    const i = index.get(key); if (i === undefined) continue;
+    const p = meta.points[i];
+    rows.set(i, list.map(([day, hour, ...v]) => {
+      const rec = new Uint8Array(w).fill(255);
+      v.forEach((x, k) => { if (x !== null && k < 11) rec[k] = Math.max(0, Math.min(254, Math.round(x / meta.scale[k]))); });
+      if (p.tc && p.tide_m) rec[pts.tide] = Math.max(0, Math.min(100, Math.round(100 * (tideHeight(p.tc, hour) - p.tide_m[0]) / Math.max(p.tide_m[1] - p.tide_m[0], 0.01))));
+      return { day, hour, rec };
+    }));
+  }
+  forecast = { generated: fc.generated, rows };
+}
+function weekCells(i) {  // the forecast strip in a break's panel
+  const list = forecast?.rows.get(i); if (!list) return "";
+  const p = meta.points[i];
+  return `<div class="note" style="margin-bottom:-4px">This week (forecast of ${forecast.generated.slice(0, 10)})</div><div class="week">` + list.map(({ day, hour, rec }) => {
+    const t = goodTrain(p, rec, 0), d = new Date(day + "T12:00:00Z"), any = p.measure === "waves" ? train(rec, 0, 2) : train(rec, 0, 0) || train(rec, 0, 1);
+    const kt = rec[9] === 255 ? "" : `${Math.round(rec[9] * meta.scale[9])} kt ${compass(rec[10] * meta.scale[10])}`, tide = rec[pts.tide] === 255 ? "" : ` · tide ${rec[pts.tide]}%`;
+    const sw = (t || any) ? `${Math.round((t || any)[0])} ft @ ${Math.round((t || any)[1])} s ${compass((t || any)[2])}` : "–";
+    return `<div title="${day}: ${sw} · ${kt}${tide}${t ? " · good" : ""}"><span>${d.toLocaleDateString(undefined, { weekday: "short", timeZone: "UTC" })} ${d.getUTCDate()}</span>` +
+      `<b class="${t ? "good" : ""}"></b><span class="v">${(t || any) ? Math.round((t || any)[0]) + " ft" : "–"}<br>${(t || any) ? Math.round((t || any)[1]) + " s" : ""}</span></div>`;
+  }).join("") + `</div>`;
+}
+function renderWeek() {  // the marked spots in view with the most good mornings coming
+  const sec = document.getElementById("weeksec");
+  sec.hidden = !forecast;
+  if (!forecast || !pointPct) return;
+  const rows = [];
+  for (const [i, list] of forecast.rows) {
+    const p = meta.points[i];
+    if (!inView(p.lat, p.lon)) continue;
+    const good = list.filter(({ rec }) => goodTrain(p, rec, 0));
+    if (good.length) rows.push({ i, n: good.length, of: list.length, first: good[0].day });
+  }
+  rows.sort((a, b) => b.n - a.n || pointPct[b.i] - pointPct[a.i]);
+  document.getElementById("weektitle").textContent = transform.k >= 1.5 ? "· in view" : "";
+  document.getElementById("week").innerHTML = rows.length ? rows.slice(0, 10).map(({ i, n, of, first }) => {
+    const p = meta.points[i], d = new Date(first + "T12:00:00Z");
+    return `<li><button data-i="${i}"><span class="rank">${n}/${of}</span><span class="nm">${p.name}<span class="rg">${p.region} · first ${d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", timeZone: "UTC" })}</span></span><span class="pc">${n} good</span></button></li>`;
+  }).join("") : `<li class="detail-empty">No good mornings forecast in view by these criteria.</li>`;
+}
+document.getElementById("week").addEventListener("click", e => {
+  const b = e.target.closest("button[data-i]"); if (!b) return;
+  const i = +b.dataset.i, p = meta.points[i]; select({ type: "point", i }); zoomTo(p.lon, p.lat);
+});
 function pointWind(e, months) {  // median speed and most common direction over all the mornings
   const kts = [], from = new Float64Array(16);
   eachMorning(e, months, o => {
@@ -462,7 +552,7 @@ function recompute() {
   for (let e = 0; e < grid.n; e++) cellPct[e] = share(grid, lut.g, e, period.months);
   pointPct = new Float32Array(pts.n);
   for (let e = 0; e < pts.n; e++) pointPct[e] = pointShare(e, period.months);
-  computeField(); findUncharted(); draw(); renderTop(); renderDetail(); renderMine(); renderCompare(); saveState();
+  computeField(); findUncharted(); draw(); renderTop(); renderDetail(); renderMine(); renderCompare(); renderWeek(); saveState();
 }
 
 // ---------- uncharted coast: rates well by the current criteria, far from every charted spot ----------
@@ -794,7 +884,7 @@ function constrain(t, view, [[bx0, by0], [bx1, by1]]) {
 }
 const zoom = d3.zoom().scaleExtent([1, 80]).constrain(constrain).on("zoom", e => {
   transform = e.transform; moving = true; draw();
-  clearTimeout(settle); settle = setTimeout(() => { moving = false; draw(); renderTop(); saveState(); }, 160);  // full resolution once still
+  clearTimeout(settle); settle = setTimeout(() => { moving = false; draw(); renderTop(); renderWeek(); saveState(); }, 160);  // full resolution once still
 });
 d3.select(canvas).call(zoom).on("dblclick.zoom", null);
 document.getElementById("zin").onclick = () => d3.select(canvas).transition().duration(250).call(zoom.scaleBy, 2);
@@ -1040,7 +1130,7 @@ document.getElementById("cmp").addEventListener("click", e => { const b = e.targ
 // ---------- the whole view as a link: criteria, months, years, filter, map, selection, comparison ----------
 function stateParams() {
   const q = new URLSearchParams();
-  q.set("c", [crit.h1, crit.t1, crit.longOn ? 1 : 0, crit.h2, crit.t2, crit.maxb, crit.clean, crit.wind, crit.angle].join("."));
+  q.set("c", [crit.h1, crit.t1, crit.longOn ? 1 : 0, crit.h2, crit.t2, crit.maxb, crit.clean, crit.wind, crit.angle, crit.tlo, crit.thi].join("."));
   const g = fromGroup && GROUPS.find(x => x.label === period.label);
   q.set("m", g ? g.id : [...picked].sort((a, b) => a - b).join("."));
   if (meta?.years) q.set("y", `${yr.from}-${yr.to}`);
@@ -1058,9 +1148,9 @@ function saveState() { clearTimeout(saveWait); saveWait = setTimeout(() => { try
 function loadState() {  // before the first draw; returns what has to wait for the map: view and selection
   const q = new URLSearchParams(location.hash.slice(1));
   const c = (q.get("c") || "").split(".").map(Number);
-  if (c.length === 9 && c.every(isFinite)) {
-    [crit.h1, crit.t1, crit.longOn, crit.h2, crit.t2, crit.maxb, crit.clean, crit.wind, crit.angle] = c; crit.longOn = !!crit.longOn;
-    const i = PRESETS.findIndex(p => ids.every(id => p[id] === crit[id]) && p.longOn === crit.longOn);
+  if ((c.length === 9 || c.length === 11) && c.every(isFinite)) {
+    [crit.h1, crit.t1, crit.longOn, crit.h2, crit.t2, crit.maxb, crit.clean, crit.wind, crit.angle, crit.tlo = 0, crit.thi = 100] = c; crit.longOn = !!crit.longOn;
+    const i = PRESETS.findIndex(p => ids.every(id => p[id] === crit[id]) && p.longOn === crit.longOn && p.tlo === crit.tlo && p.thi === crit.thi);
     presetSel.value = i >= 0 ? i : "custom"; syncControls();
   }
   const m = q.get("m");
@@ -1127,6 +1217,32 @@ qEl.addEventListener("keydown", e => {
 qRes.addEventListener("click", e => { const b = e.target.closest("button[data-n]"); if (b) pick(hits[+b.dataset.n]); });
 document.addEventListener("click", e => { if (!e.target.closest(".search")) qRes.hidden = true; });
 const EMPTY = `<h2>Selected</h2><p class="detail-empty">Click a break, any stretch of coast or any patch of ocean to see its month-by-month chart.</p>`;
+const compass = deg => P16[Math.round(deg / 22.5) % 16];
+const fdeg = c => Math.round(c * 9 / 5 + 32);
+const SUITS = [[24, "boardshorts"], [22, "rash vest or shorty"], [19, "2 mm shorty or 3/2"], [16, "3/2 full"], [13, "4/3 full"], [10, "5/4 full, boots"], [-5, "6/5 hooded, boots, gloves"]];
+function waterFacts(sst) {  // water temperature over the chosen months, and a wetsuit for the coldest of them
+  if (!sst) return "";
+  const t = period.months.map(m => sst[m - 1]).filter(isFinite);
+  if (!t.length) return "";
+  const lo = Math.min(...t), hi = Math.max(...t), suit = SUITS.find(([f]) => lo >= f)[1];
+  const temp = Math.round(lo) === Math.round(hi) ? `${Math.round(lo)} °C (${fdeg(lo)} °F)` : `${Math.round(lo)}–${Math.round(hi)} °C (${fdeg(lo)}–${fdeg(hi)} °F)`;
+  return `<dt>Water</dt><dd>${temp} · ${suit}</dd>`;
+}
+function nearestSst(lat, lon) {  // water temperatures from the nearest marked spot, OpenStreetMap spot or coast point
+  let best = null, bd = Infinity;
+  for (const s of [...meta.points, ...osm, ...gaps]) {
+    if (!s.sst) continue;
+    const d = (s.lat - lat) ** 2 + ((s.lon - lon) * Math.cos((lat * Math.PI) / 180)) ** 2;
+    if (d < bd) { bd = d; best = s; }
+  }
+  return best && best.sst;
+}
+function checkFacts(c) {  // how the wave model compared with the nearest wave buoy (surfmap/buoys.py)
+  if (!c) return "";
+  const diff = Math.abs(c.bias) < 0.05 ? "matches it" : `reads ${Math.abs(c.bias * FT).toFixed(1)} ft ${c.bias > 0 ? "high" : "low"}`;
+  return `<dt>Buoy check</dt><dd>${c.trust} · model ${diff} against buoy ${c.buoy} (${c.km} km), r ${c.r}; 4 ft+ mornings ${c.model4ft}% vs ${c.buoy4ft}% at the buoy` +
+    (c.nearshore ? "; the buoy is offshore and this break's model is inshore, so some gap is real sheltering" : "") + `</dd>`;
+}
 function describe(sel) {  // what the panels show about a selection: title, badge, % good, monthly shares, facts
   let title, sub, badge, pct, shares, typ, facts = "", side = "";
   if (sel.type === "point") {
@@ -1135,9 +1251,10 @@ function describe(sel) {  // what the panels show about a selection: title, badg
     badge = { break: "Named break", stretch: `Under-the-radar ◆${p.num}`, coast: "Regional coast" }[p.kind];
     pct = pointPct[i]; shares = MONTHS.map((_, m) => pointShare(i, [m + 1]));
     typ = pointTypical(i, period.months);
-    facts = `<dt>Faces</dt><dd>${p.facing}°</dd><dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${pointWind(i, period.months)}</dd>` +
+    facts = `<dt>Faces</dt><dd>${p.facing}°${p.window ? ` · swell window ${p.window[0]}–${p.window[1]}° (${compass(p.window[0])}–${compass(p.window[1])})` : ""}</dd>` +
+      `<dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${pointWind(i, period.months)}</dd>${waterFacts(p.sst)}` +
       `<dt>Measured on</dt><dd>${p.measure === "waves" ? "total waves (no wind test)" : "either swell train"}</dd>` +
-      `<dt>Waves read at</dt><dd>${p.source || "model cell"}, ${latlon(p.cell[0], p.cell[1], 2)}</dd>`;
+      `<dt>Waves read at</dt><dd>${p.source || "model cell"}, ${latlon(p.cell[0], p.cell[1], 2)}</dd>${checkFacts(p.check)}`;
   } else if (sel.type === "coast") {
     const c = sel.c, s = R.src[c], cell = R.sources[s], open = R.open.subarray(c * 16, c * 16 + 16);
     const pass = code => open[code & 15] >= 128 && lut.g[code >> 4];
@@ -1155,7 +1272,7 @@ function describe(sel) {  // what the panels show about a selection: title, badg
     shares = MONTHS.map((_, m) => mix(coastShare(c, [m + 1]), blend(sel.under, x => share(grid, lut.g, x, [m + 1]))));
     typ = typical(coastBins, s, period.months, pass, code => code >> 4, code => code & 15);
     side = rose(open);
-    facts = `<dt>Swell reaches it from</dt><dd>${exposure(open)}</dd>` +
+    facts = `<dt>Swell reaches it from</dt><dd>${exposure(open)}</dd>${waterFacts(nearestSst(sel.lat, sel.lon))}` +
       `<dt>Waves read at</dt><dd>${meta.cells.enclosed[cell] ? "model point" : meta.res + "° model cell"} ${latlon(la, lo)}, ${Math.round(km({ lat: sel.lat, lon: sel.lon }, { lat: la, lon: lo }))} km away</dd>` +
       `<dt>Measured on</dt><dd>${meta.cells.enclosed[cell] ? "total waves" : "swell"}</dd>`;
   } else {
@@ -1186,6 +1303,7 @@ function renderDetail() {
     <h3>${title}</h3><div class="note" style="margin-top:-6px">${sub}</div>
     <div style="display:flex;align-items:center;gap:10px;justify-content:space-between"><div style="display:flex;align-items:baseline;gap:10px"><span class="bigpct">${isFinite(pct) ? Math.round(pct) + "%" : "–"}</span><span class="note">of mornings good · ${period.label}${yearsLabel()}</span></div>${side}</div>
     ${bars(shares)}
+    ${selected.type === "point" ? weekCells(selected.i) : ""}
     <dl class="facts"><dt>Best 3 months</dt><dd>${bestMonths(shares)}</dd><dt>Typical good morning</dt><dd>${typ}</dd>${facts}</dl>`;
   document.getElementById("favbtn").onclick = () => toggleFav(key);
   document.getElementById("cmpbtn").onclick = () => toggleCompare(key);
@@ -1240,7 +1358,20 @@ const ids = ["h1", "t1", "h2", "t2", "maxb", "wind", "angle", "clean"];
 const CHOP = ["0.2×", "0.35×", "0.5×", "0.75×", "1×"];
 const fmt = { h1: v => `${v} ft`, h2: v => `${v} ft`, t1: v => `${v} s`, t2: v => `${v} s`, maxb: v => v > 40 ? "no limit" : `${v} ft`,
   wind: v => v > 30 ? "any" : `${v} kt`, angle: v => v > 90 ? "any" : `±${v}°`, clean: v => v >= 5 ? "any" : `${CHOP[v]} the swell` };
+function tideLabel() { return crit.tlo <= 0 && crit.thi >= 100 ? "any" : `${crit.tlo}–${crit.thi}%`; }
+function showTides() {
+  const lo = document.getElementById("tlo"), hi = document.getElementById("thi"), fill = document.getElementById("tidesfill");
+  lo.value = crit.tlo; hi.value = crit.thi; document.getElementById("tidev").textContent = tideLabel();
+  fill.style.left = `calc(9px + (100% - 18px) * ${crit.tlo / 100})`; fill.style.width = `calc((100% - 18px) * ${(crit.thi - crit.tlo) / 100})`;
+  lo.style.zIndex = crit.tlo >= 100 ? 3 : 1;
+}
+for (const id of ["tlo", "thi"]) document.getElementById(id).addEventListener("input", e => {
+  let lo = +document.getElementById("tlo").value, hi = +document.getElementById("thi").value;
+  if (lo > hi) { if (id === "tlo") hi = lo; else lo = hi; }
+  crit.tlo = lo; crit.thi = hi; showTides(); changed();
+});
 function syncControls() {
+  showTides();
   ids.forEach(id => { document.getElementById(id).value = crit[id]; document.getElementById(id + "v").textContent = fmt[id](crit[id]); });
   document.getElementById("longon").checked = crit.longOn; document.getElementById("longbox").hidden = !crit.longOn;
 }
@@ -1343,14 +1474,16 @@ async function localTools() {
   try {
     meta = await json("data/meta.json");
     document.getElementById("loading").textContent = "Loading the model data (about 25 MB)…";
-    const [g, p, c, l, r, o, pl, gp] = await Promise.all([bytes("data/grid.b64.txt"), bytes("data/points.b64.txt"), bytes("data/coast.b64.txt"),
-      json("data/land.json"), json("data/raster.json"), json("data/osm.json").catch(() => []), json("data/places.json").catch(() => []), json("data/coastpts.json").catch(() => [])]);
-    gaps = gp.map(([name, where, lat, lon]) => ({ name, where, lat, lon, gap: true }));
-    osm = o.map(([name, lat, lon]) => ({ name, lat, lon }));
+    const [g, p, c, l, r, o, pl, gp, fc] = await Promise.all([bytes("data/grid.b64.txt"), bytes("data/points.b64.txt"), bytes("data/coast.b64.txt"),
+      json("data/land.json"), json("data/raster.json"), json("data/osm.json").catch(() => []), json("data/places.json").catch(() => []), json("data/coastpts.json").catch(() => []),
+      json("data/forecast.json").catch(() => null)]);
+    gaps = gp.map(([name, where, lat, lon, sst]) => ({ name, where, lat, lon, sst, gap: true }));
+    osm = o.map(([name, lat, lon, sst]) => ({ name, lat, lon, sst }));
     places = pl.map(([name, region, country, lat, lon]) => ({ name, region, country, lat, lon }));
     grid = gridAll = unpack(g, meta.cells.lat.length); pts = unpackPoints(p, meta.points.length, meta.morning.length);
-    pts.year = meta.morning.indexOf("year"); coastBins = coastAll = unpack(c, r.coast.sources.length); land = splitLand(l);
+    pts.year = meta.morning.indexOf("year"); pts.tide = meta.morning.indexOf("tide"); coastBins = coastAll = unpack(c, r.coast.sources.length); land = splitLand(l);
     meta.years = meta.years || [...new Set(Object.values(meta.seasons).flat())].sort();
+    setupForecast(fc);
     setupRaster(r, new Uint8Array(await inflate(r.cat)), await inflate(r.coast.data));
     document.getElementById("about").textContent += ` · data as of ${meta.generated}; ${meta.res}° ocean grid, coast at ${r.res}°`;
     document.getElementById("loading").hidden = true;

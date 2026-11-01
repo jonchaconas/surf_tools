@@ -1,11 +1,15 @@
-# Publishes the Predictive Surf Atlas (web/) to the gh-pages branch whenever it changes on main.
-# GitHub Pages serves that branch: Settings → Pages → Deploy from a branch → gh-pages, / (root).
+# Publishes the Predictive Surf Atlas (web/) to the gh-pages branch whenever it changes on main, and
+# every morning with a fresh 7-day forecast (surfmap/forecast.py). GitHub Pages serves that branch.
+# Optional repository secrets COPERNICUSMARINE_SERVICE_USERNAME / _PASSWORD let the forecast use
+# Copernicus Marine (the climate record's own model); without them it uses Open-Meteo for waves.
 name: Atlas on GitHub Pages
 
 on:
   push:
     branches: [main]
     paths: ["web/**", ".github/workflows/pages.yml"]
+  schedule:
+    - cron: "40 10 * * *"  # daily, once the overnight model runs are out
   workflow_dispatch:
 
 permissions:
@@ -20,6 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Forecast for the coming week
+        env:
+          COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
+          COPERNICUSMARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUSMARINE_SERVICE_PASSWORD }}
+        run: uv run python -m surfmap forecast || echo "::warning::forecast failed; publishing the last committed one"
       # web/index.html has no document skeleton (the artifact host and `surfmap gui` add one);
       # wrap it the same way surfmap/gui.py does.
       - name: Assemble the site

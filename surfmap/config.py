@@ -14,7 +14,7 @@ SUMMARIES = (
     ("October–March", "Best named breaks, October–March", (10, 11, 12, 1, 2, 3)),
     ("April–September", "Best named breaks, April–September", (4, 5, 6, 7, 8, 9)),
 )
-N_SEASONS = 5     # most recent complete years per calendar month (going to 10 once downloaded)
+N_SEASONS = 10    # most recent complete years per calendar month, back to FIRST_YEAR
 FIRST_YEAR = 2017  # the WW3 archive (PacIOOS) starts in January 2017
 
 
@@ -44,3 +44,6 @@ EXPOSURE = 75
 # straight offshore. This replaces the open-ocean wind-sea test, which reads chop far out to sea.
 MAX_WIND_KT = 8.0
 OFFSHORE = 45
+
+# Nearshore refraction outside CDIP's California (refract.py). Off: see the note in points.mornings.
+REFRACT = False

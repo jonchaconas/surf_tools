@@ -138,22 +138,54 @@ def _hists(samples, entities, year=None, direction=False):
 
 # One morning at a point, as bytes (255 = none): swell 1 and 2 as height (0.05 m), peak period
 # (0.1 s) and direction (2 degrees); all waves as the same three; wind speed (0.5 kt) and direction;
-# the year (since 2000).
+# the year (since 2000); the tide, as % of the way from the break's low (5th percentile) to high (95th).
 MORNING = [("hs1", 0.05), ("tp1", 0.1), ("dir1", 2), ("hs2", 0.05), ("tp2", 0.1), ("dir2", 2),
-           ("hs", 0.05), ("tp", 0.1), ("dir", 2), ("kt", 0.5), ("wind_from", 2), ("year", 1)]
+           ("hs", 0.05), ("tp", 0.1), ("dir", 2), ("kt", 0.5), ("wind_from", 2), ("year", 1), ("tide", 1)]
 
 
-def _records(s):
+def _records(s, tide_range):
     """points.season() arrays -> uint8 records, one row per morning."""
     from .inland import TP_RATIO
 
+    lo, hi = tide_range
     cols = []
     for key, step in MORNING:
         v = s["tm"] * TP_RATIO if key == "tp" else \
-            s["day"].astype("datetime64[Y]").astype(int) + 1970 - 2000 if key == "year" else s[key]
+            s["day"].astype("datetime64[Y]").astype(int) + 1970 - 2000 if key == "year" else \
+            np.clip(100 * (s["tide"] - lo) / max(hi - lo, 0.01), 0, 100) if key == "tide" else s[key]
         q = np.round(np.asarray(v, float) / step)
         cols.append(np.where(np.isfinite(q), np.clip(q, 0, 254), 255).astype(np.uint8))
     return np.stack(cols, axis=1)
+
+
+def _forecast_extras(e):
+    """What the page and forecast.py need for the coming week: the CDIP site (California) and the
+    tide constituents {name: [amplitude m, phase deg]}, so the page can predict any morning's tide."""
+    from . import cdip
+
+    out = {}
+    if (site := cdip.site_for(e["lat"], e["lon"])):
+        out["cdip"] = site
+    if (cons := tides._constituents(e["lat"], e["lon"])):
+        out["tc"] = {c: [round(a, 4), round(ph, 2)] for c, (a, ph) in cons.items()}
+    return out
+
+
+def _buoy_checks():
+    """{(kind, name): its best buoy comparison (surfmap/buoys.py)}, for breaks and regional coasts:
+    the pair with the most matched mornings among buoys within 40 km, else the nearest."""
+    path = config.DATA / "buoys" / "validation.json"
+    if not path.exists():
+        return {}
+    out, rows = {}, json.loads(path.read_text())
+    for kind, name in {(v.get("kind", "break"), v["break"]) for v in rows}:
+        pairs = [v for v in rows if v.get("kind", "break") == kind and v["break"] == name]
+        close = [v for v in pairs if v["km"] <= 40]
+        v = max(close, key=lambda v: v["n"]) if close else min(pairs, key=lambda v: v["km"])
+        out[(kind, name)] = dict(buoy=v["buoy"], name=v["buoy_name"], km=round(v["km"]), n=v["n"], bias=round(v["bias_m"], 2),
+                         r=round(v["r"], 2), trust=v["trust"], buoy4ft=round(v["pct4ft_buoy"]), model4ft=round(v["pct4ft_model"]),
+                         nearshore=v["source"].startswith("CDIP"))
+    return out
 
 
 def _points():
@@ -178,16 +210,28 @@ def _points():
         entries.append(dict(name=name, region=area, group=region, kind="coast", lat=lat, lon=lon, facing=facing,
                             measure="swell" if regions.standard(region).get("ocean") else "waves"))
 
+    from . import sst
+    from .spots import WINDOWS
+
+    checks = _buoy_checks()
     out, counts, recs = [], [], []
     for e in entries:
         m = P.mornings(e["lat"], e["lon"])
         if m is None:
             print(f"  not downloaded yet, left out: {e['name']}", flush=True)
             continue
+        tide = np.nanpercentile(m["tide"], [5, 95]) if np.isfinite(m["tide"]).any() else (0.0, 0.0)
         for month in range(1, 13):
-            r = _records(P.season(m, (month,)))
+            r = _records(P.season(m, (month,)), tide)
             counts.append(len(r))
             recs.append(r)
+        e["tide_m"] = [round(float(x), 2) for x in tide]
+        e.update(_forecast_extras(e))
+        e["sst"] = sst.monthly(e["lat"], e["lon"])
+        if e["kind"] == "break" and e["name"] in WINDOWS:
+            e["window"] = list(WINDOWS[e["name"]])
+        if (e["kind"], e["name"]) in checks:
+            e["check"] = checks[(e["kind"], e["name"])]
         e["cell"] = [round(float(x), 3) for x in m["cell"]]
         e["source"] = m["source"]
         e["tide"] = tides.text(e["name"], rating.FT) or "none"
@@ -277,16 +321,31 @@ def _land_tiles():
     return keys
 
 
+# Place names in Palestine (the atlas owner's choice): the country is Palestine, towns go by their
+# Arabic names, and towns founded after 1948 by the Arab town they replaced or grew beside
+# (Tel Aviv -> Yafa). The coast also gets the historic Arab towns along it, so coast points there
+# are named after them.
+PALESTINE = {"Haifa": ("Hayfa", 32.822, 34.978), "Nazareth": ("An-Nasira", 32.704, 35.296), "Tel Aviv": ("Yafa", 32.054, 34.752),
+             "Ramla": ("Ar-Ramla", 31.927, 34.866), "Jerusalem": ("Al-Quds", 31.776, 35.234), "Beer Sheva": ("Bir as-Sab'", 31.244, 34.79)}
+PALESTINE_COAST = [("'Akka", 32.927, 35.074), ("Al-Tantura", 32.607, 34.918), ("Qisarya", 32.497, 34.891), ("Umm Khalid", 32.330, 34.860),
+                   ("Isdud", 31.754, 34.664), ("Al-Majdal 'Asqalan", 31.668, 34.574), ("Khan Yunis", 31.346, 34.306),
+                   ("Rafah", 31.287, 34.245), ("Umm al-Rashrash", 29.557, 34.952)]
+
+
 def _places():
     """[[name, region, country, lat, lon]] for every Natural Earth populated place (10m), so the page
-    can name any stretch of coast after its nearest town."""
+    can name any stretch of coast after its nearest town (see PALESTINE)."""
     import cartopy.io.shapereader as shp
 
     out = []
     for r in shp.Reader(shp.natural_earth("10m", "cultural", "populated_places_simple")).records():
         a = r.attributes
-        out.append([a["name"], a.get("adm1name") or "", a.get("adm0name") or "", round(a["latitude"], 3), round(a["longitude"], 3)])
-    return out
+        name, region, country, lat, lon = a["name"], a.get("adm1name") or "", a.get("adm0name") or "", a["latitude"], a["longitude"]
+        if country in ("Israel", "Palestine", "Gaza Strip", "West Bank"):
+            name, lat, lon = PALESTINE.get(name, (name, lat, lon))
+            region, country = "", "Palestine"
+        out.append([name, region, country, round(lat, 3), round(lon, 3)])
+    return out + [[n, "", "Palestine", la, lo] for n, la, lo in PALESTINE_COAST]
 
 
 def _land():
@@ -485,12 +544,14 @@ def export(res=2):
     from . import osm
 
     land = _land_raster()
+    from . import sst
+
     surf = osm.spots(land, LAND_RES)
-    (OUT / "osm.json").write_text(json.dumps(surf, separators=(",", ":"), ensure_ascii=False))
+    (OUT / "osm.json").write_text(json.dumps([[*o, sst.monthly(o[1], o[2])] for o in surf], separators=(",", ":"), ensure_ascii=False))
     charted = [(la, lo) for _, _, la, lo, _ in SPOTS] + [(la, lo) for _, la, lo in surf] + \
         [(c[2], c[3]) for spec in regions.REGIONS.values() for c in spec["coasts"]]
     raster, sources, shore = _raster(cells, res, land, charted)
-    gaps = _coast_points(shore, charted + [(e[2], e[3]) for e in STRETCHES])
+    gaps = [[*g, sst.monthly(g[2], g[3])] for g in _coast_points(shore, charted + [(e[2], e[3]) for e in STRETCHES])]
     (OUT / "coastpts.json").write_text(json.dumps(gaps, separators=(",", ":"), ensure_ascii=False))
     print(f"  coast points filling the gaps: {len(gaps)}", flush=True)
     (OUT / "raster.json").write_text(json.dumps(raster, separators=(",", ":")))

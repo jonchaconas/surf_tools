@@ -18,7 +18,7 @@ from shapely.geometry import Point
 from shapely.ops import unary_union
 
 from . import config, inland, points, rating, regions, ww3
-from .spots import SPOTS
+from .spots import SPOTS, WINDOWS
 from .stretches import STRETCHES
 
 RES = 0.25
@@ -297,7 +297,7 @@ class Period:
         rows = []
         for name, region, lat, lon, facing in SPOTS:
             basin = _basin_of(lat, lon)
-            s = points.summary(lat, lon, facing, self.months, relaxed=bool(basin))
+            s = points.summary(lat, lon, facing, self.months, relaxed=bool(basin), window=WINDOWS.get(name))
             if s is not None:
                 rows.append(dict(name=name, region=region, lat=lat, lon=lon, basin=basin, **s))
         return sorted(rows, key=lambda r: -r["pct"])

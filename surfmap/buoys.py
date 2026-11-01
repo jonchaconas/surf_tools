@@ -2,7 +2,9 @@
 
 Buoys come from NOAA's National Data Buoy Center (NDBC), which carries its own 3 m discus and
 foam buoys, the Scripps CDIP Waveriders and the Great Lakes (GLOS) buoys, with no login. Each
-is hand-matched in BUOYS to the named breaks within ~150 km on the same coast and exposure.
+is hand-matched in BUOYS to the named breaks within ~150 km on the same coast and exposure, and
+in COASTS to the Lake Michigan and Lake Superior coasts of the regional pages (whose lake standard
+is judged on total waves, which is what this compares everywhere).
 Their standard meteorological records give WVHT (significant height, m), DPD (dominant period, s)
 and MWD (direction, degrees), from four places on https://www.ndbc.noaa.gov/data/:
 
@@ -14,8 +16,10 @@ and MWD (direction, degrees), from four places on https://www.ndbc.noaa.gov/data
 Each morning that points.mornings() rates is paired with the buoy reading nearest the UTC instant
 of the model step it used (MFWAM's 3-hourly step, or CDIP's hour), within MATCH. Over the matched
 mornings, for the model's total Hs against the buoy's WVHT: bias (model minus buoy) and RMSE in
-metres, Pearson r, and the share of mornings at 4 ft (1.22 m) or more by each. Each pair gets a
-trust label:
+metres, Pearson r, and the share of mornings at 4 ft (1.22 m, also the lake standard's floor) or
+more by each. On the mornings the buoy has 4 ft or more, bias4ft_m is the model's bias and hit4ft
+the % the model also puts at 4 ft: the days that decide whether a morning rates at all, which a
+small overall bias can hide. Each pair gets a trust label:
 
     good   |bias| < 0.2 m and r > 0.8
     fair   |bias| < 0.4 m and r > 0.6
@@ -60,6 +64,10 @@ MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 HEADERS = {"User-Agent": "surfmap buoy validation (python-requests)"}
 
 # (station, name, lat, lon, breaks): breaks are spots.SPOTS names on the same coast and exposure.
+# Not used: 46206 La Perouse Bank (Tofino), 44258 Halifax Harbour (Lawrencetown), 62093 M4 Donegal
+# Bay (Bundoran), 62107 Seven Stones (Fistral) and 22105 (Yangyang) are listed by NDBC but have no
+# archived stdmet years; 46216 Goleta Point, 46223 Dana Point, 51204 Barbers Point, 45171 Granite
+# Island and 41116/41118 off Sebastian Inlet ended in 2016-2018.
 BUOYS = [
     # Hawaii: CDIP Waveriders off each break's own shore.
     ("51201", "Waimea Bay, Oahu (CDIP 106)", 21.671, -158.118, ("Pipeline", "Sunset Beach")),
@@ -84,7 +92,7 @@ BUOYS = [
     ("46254", "Scripps Nearshore (CDIP 201)", 32.868, -117.267, ("Black's Beach",)),
     ("46225", "Torrey Pines Outer (CDIP 100)", 32.933, -117.391, ("Black's Beach",)),
     ("46232", "Point Loma South (CDIP 191)", 32.517, -117.425, ("Todos Santos",)),
-    # Pacific Northwest. Tofino's own buoy (La Perouse Bank, 46206) is Canadian: not archived at NDBC.
+    # Pacific Northwest.
     ("46278", "Tillamook Bay South Jetty (CDIP 270)", 45.559, -123.991, ("Short Sands",)),
     ("46029", "Columbia River Bar, 20 nm W", 46.148, -124.508, ("Short Sands",)),
     ("46211", "Grays Harbor (CDIP 036)", 46.857, -124.243, ("Westport",)),
@@ -114,7 +122,46 @@ BUOYS = [
     ("45004", "East Superior, 70 nm NE of Marquette", 47.583, -86.586, ("Marquette",)),
     ("45176", "Cleveland Intake Crib", 41.550, -81.765, ("Edgewater",)),
     ("45205", "Edgewater Beach", 41.501, -81.748, ("Edgewater",)),
+    # Great Lakes buoys used only for the regional coasts (COASTS).
+    ("45198", "Chicago", 41.892, -87.563, ()),
+    ("45177", "Ohio Street Beach, Chicago", 41.894, -87.613, ()),
+    ("45174", "Wilmette", 42.135, -87.655, ()),
+    ("45187", "Winthrop Harbor", 42.491, -87.779, ()),
+    ("45199", "Salmon Unlimited, Racine", 42.702, -87.647, ()),
+    ("45007", "South Michigan, 43 nm ESE of Milwaukee", 42.674, -87.026, ()),
+    ("45170", "Michigan City", 41.755, -86.968, ()),
+    ("45026", "Cook Nuclear Plant, Stevensville", 41.982, -86.619, ()),
+    ("45168", "South Haven", 42.397, -86.331, ()),
+    ("45024", "Ludington", 43.980, -86.560, ()),
+    ("45183", "Sleeping Bear Dunes", 44.982, -85.831, ()),
+    ("45002", "North Michigan, mid-lake", 45.344, -86.411, ()),
+    ("45006", "West Superior, 30 nm NE of Outer Island", 47.335, -89.793, ()),
+    ("45216", "Ontonagon", 46.907, -89.354, ()),
+    ("45023", "North Entry, Keweenaw Peninsula", 47.270, -88.607, ()),
+    ("45172", "Grand Marais, Michigan", 46.740, -85.980, ()),
+    ("45001", "Mid Superior, 60 nm NNE of Hancock", 48.061, -87.793, ()),
 ]
+
+# {regional page: {coast: buoys}} for regions.REGIONS coasts, nearest first, then a mid-lake buoy
+# where it lies in the coast's fetch. Not used: 45136 Slate Island (Terrace Bay) and 45217
+# Wisconsin Point (Park Point) have no archived years, 45219 Two Harbors no wave heights, and
+# 45025 South Entry faces into Keweenaw Bay.
+COASTS = {
+    "Lake Michigan": {
+        "Whiting": ("45198", "45170", "45007"), "Gary": ("45170", "45198", "45007"), "Portage": ("45170", "45007"),
+        "Chicago": ("45177", "45198", "45174"), "Racine": ("45199", "45187", "45007"), "Milwaukee": ("45013", "45007"),
+        "Sheboygan": ("45218", "45210", "45013"), "New Buffalo": ("45170", "45026"), "St. Joseph": ("45026", "45168"),
+        "Holland": ("45029", "45168", "45007"), "Grand Haven": ("45161", "45029", "45007"),
+        "Ludington": ("45024", "45210"), "Frankfort": ("45183", "45024", "45002"),
+    },
+    "Lake Superior": {
+        "Park Point": ("45027", "45028"), "Stoney Point": ("45028", "45027"), "Grand Marais MN": ("45006",),
+        "Little Girl's Point": ("45216", "45006"), "Ontonagon": ("45216", "45006", "45023"),
+        "Marquette": ("45173", "45211", "45004"), "Au Train": ("45173", "45211", "45004"),
+        "Grand Marais MI": ("45172", "45211", "45004"), "Whitefish Point": ("45172", "45004"),
+        "Agawa Bay": ("45004",), "Terrace Bay": ("45001",),
+    },
+}
 
 
 def _get(url):
@@ -275,35 +322,46 @@ def compare(model_hs, t, buoy):
     n = int(ok.sum())
     if n < 3:
         return dict(n=n, bias_m=None, rmse_m=None, r=None, pct4ft_buoy=None, pct4ft_model=None,
-                    hs_buoy_m=None, trust="few", first=None, last=None)
-    d = m - b
+                    hs_buoy_m=None, bias4ft_m=None, hit4ft=None, trust="few", first=None, last=None)
+    d, big = m - b, b >= FT4
     out = dict(bias_m=float(d.mean()), rmse_m=float(np.sqrt(np.mean(d**2))), r=float(np.corrcoef(m, b)[0, 1]),
-               pct4ft_buoy=float(100 * np.mean(b >= FT4)), pct4ft_model=float(100 * np.mean(m >= FT4)),
-               hs_buoy_m=float(b.mean()))
-    out = {key: round(v, 3) for key, v in out.items()}
+               pct4ft_buoy=float(100 * np.mean(big)), pct4ft_model=float(100 * np.mean(m >= FT4)),
+               hs_buoy_m=float(b.mean()), bias4ft_m=float(d[big].mean()) if big.any() else None,
+               hit4ft=float(100 * np.mean(m[big] >= FT4)) if big.any() else None)
+    out = {key: v if v is None else round(v, 3) for key, v in out.items()}
     out["trust"] = trust(n, out["bias_m"], out["r"])
     days = t[ok].astype("datetime64[D]")
     return dict(n=n, **out, first=str(days.min()), last=str(days.max()))
 
 
-def _breaks():
-    return {name: (region, lat, lon) for kind, name, region, lat, lon, _ in points.all_points() if kind == "break"}
+def _pairs():
+    """[(kind, name, region, lat, lon, buoy)] for the breaks in BUOYS (in spots.SPOTS order), then
+    the coasts in COASTS, each point's buoys nearest first."""
+    pts = {(kind, name, region): (lat, lon) for kind, name, region, lat, lon, _ in points.all_points()}
+    out = []
+    for (kind, name, region), (lat, lon) in pts.items():
+        if kind == "break":
+            near = [b for b in BUOYS if name in b[4]]
+        elif kind == "coast" and name in COASTS.get(region, {}):
+            near = [b for b in BUOYS if b[0] in COASTS[region][name]]
+        else:
+            continue
+        near.sort(key=lambda b: cdip._km(lat, lon, b[2], b[3]))
+        out += [(kind, name, region, lat, lon, b) for b in near]
+    return out
 
 
 def validate():
-    """Compare every break-buoy pair in BUOYS and write data/buoys/validation.json; returns the list."""
-    spots = _breaks()
-    pairs = sorted(((name, b) for b in BUOYS for name in b[4]), key=lambda p: (list(spots).index(p[0]), p[1][0]))
+    """Compare every break-buoy and coast-buoy pair and write data/buoys/validation.json; returns the list."""
     out = []
-    for name, (station, buoy_name, blat, blon, _) in pairs:
-        region, lat, lon = spots[name]
+    for kind, name, region, lat, lon, (station, buoy_name, blat, blon, _) in _pairs():
         m, buoy = points.mornings(lat, lon), series(station)
         if m is None or buoy is None or len(buoy["t"]) < 2:
             print(f"  {name} / {station}: no {'model' if m is None else 'buoy'} data", flush=True)
             continue
         days, t_off, hs_off, t_used = _samples(lat, lon)
         assert np.array_equal(days, m["day"]), name
-        row = {"break": name, "region": region, "buoy": station, "buoy_name": buoy_name, "buoy_lat": blat,
+        row = {"break": name, "kind": kind, "region": region, "buoy": station, "buoy_name": buoy_name, "buoy_lat": blat,
                "buoy_lon": blon, "km": round(float(cdip._km(lat, lon, blat, blon)), 1), "source": m["source"]}
         row.update(compare(m["hs"], t_used, buoy))
         if m["source"].startswith("CDIP"):
@@ -319,7 +377,9 @@ def _print(rows):
     f = lambda v, fmt: "   -" if v is None else format(v, fmt)
     print(f"{'break':18s} {'buoy':6s} {'km':>5s} {'n':>5s} {'bias':>6s} {'rmse':>5s} {'r':>5s} {'4ft b/m %':>10s} trust"
           "   | offshore bias, r, trust")
-    for r in rows:
+    for k, r in enumerate(rows):
+        if r["kind"] == "coast" and (k == 0 or rows[k - 1]["region"] != r["region"]):
+            print(f"-- {r['region']} coasts")
         line = (f"{r['break']:18s} {r['buoy']:6s} {r['km']:5.0f} {r['n']:5d} {f(r['bias_m'], '+6.2f')} "
                 f"{f(r['rmse_m'], '5.2f')} {f(r['r'], '5.2f')} {f(r['pct4ft_buoy'], '4.0f')}/{f(r['pct4ft_model'], '<4.0f')} "
                 f"{r['trust']:5s}")

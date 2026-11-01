@@ -81,3 +81,14 @@ SPOTS = [
 ("Varna","Black Sea, Bulgaria",43.200,27.950,90),("Sochi","Black Sea, Russia",43.580,39.720,220),
 ("Aktau","Caspian Sea, Kazakhstan",43.650,51.150,250),("Baku","Caspian Sea, Azerbaijan",40.330,49.950,120),
 ]
+
+# Swell windows (degrees the swell comes from, clockwise from the first to the second) for breaks
+# that only work on a narrower or off-centre range than facing +/- config.EXPOSURE. From surf
+# guides and local knowledge: edit freely. Breaks not listed use their facing.
+WINDOWS = {
+    "Pipeline": (285, 360), "Sunset Beach": (280, 20), "Puerto Escondido": (170, 240), "Chicama": (190, 250),
+    "Hossegor": (260, 330), "Mundaka": (290, 350), "Nazaré": (250, 330), "Supertubos": (220, 320),
+    "Skeleton Bay": (190, 250), "Jeffreys Bay": (180, 245), "G-Land": (170, 235), "Uluwatu": (185, 245),
+    "Cloudbreak": (185, 250), "Teahupo'o": (185, 245), "Snapper Rocks": (70, 160), "Bells Beach": (190, 250),
+    "Raglan": (220, 280),
+}

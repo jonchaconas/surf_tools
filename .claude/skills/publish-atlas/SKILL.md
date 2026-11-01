@@ -1,16 +1,15 @@
 ---
 name: publish-atlas
-description: Export web/data for the interactive Predictive Surf Atlas, test the page in a headless browser, republish it to its claude.ai artifact URL and push (which also deploys GitHub Pages). Use after changing web/index.html, surfmap/export.py, the rule, or any data the atlas shows.
+description: Export web/data for the interactive Predictive Surf Atlas, test the page in a headless browser, and push, which deploys it to GitHub Pages. Use after changing web/index.html, surfmap/export.py, the rule, or any data the atlas shows.
 ---
 
 # Export, test and publish the atlas
 
-The atlas is `web/index.html` plus `web/data/`. It is published in two places:
-
-- a private claude.ai artifact, https://claude.ai/artifact/5Wa8fpAjfn87AZdXgummjP — keep this
-  URL; never publish a new artifact for it;
-- GitHub Pages, https://jonchaconas.github.io/surf_tools/, served from the `gh-pages` branch
-  that `.github/workflows/pages.yml` rebuilds on every push that touches `web/`.
+The atlas is `web/index.html` plus `web/data/`. It is published on GitHub Pages at
+https://jonchaconas.github.io/surf_tools/. Pages serves the `gh-pages` branch, which
+`.github/workflows/pages.yml` rebuilds on every push that touches `web/` and refreshes once a
+day for the forecast. The older claude.ai artifact copy is retired (the user's choice,
+2026-11-01): don't publish to it.
 
 ## 1. Export
 
@@ -40,20 +39,7 @@ prints recompute and render timings. It must print `console: clean` and `worst: 
 cropped to 79°N–68.5°S with the legend underneath, and nothing should overflow at phone width.
 Stop the server afterwards.
 
-## 3. Publish
-
-Publish `web/index.html` with the Artifact tool, passing the URL above and the data files as
-`files`:
-
-```
-data/meta.json, data/land.json, data/grid.b64.txt, data/points.b64.txt,
-data/raster.json, data/coast.b64.txt
-```
-
-Every path maps to `web/<same path>`. Files you leave out keep their last published version,
-so a page-only change needs only `file_path`.
-
-## 4. Commit and push
+## 3. Commit and push
 
 Commit `web/` together with the code that produced it, then push. The workflow rebuilds the
 `gh-pages` branch, which GitHub Pages serves. If https://jonchaconas.github.io/surf_tools/

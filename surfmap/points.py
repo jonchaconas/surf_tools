@@ -20,7 +20,7 @@ from functools import lru_cache
 import numpy as np
 import xarray as xr
 
-from . import config, regions
+from . import config, regions, tides
 from .spots import SPOTS
 from .stretches import STRETCHES
 
@@ -177,7 +177,7 @@ def _open(paths):
 def mornings(lat, lon):
     """Morning arrays for one point, or None until both downloads are cached:
     day, hs1/tp1/dir1 and hs2/tp2/dir2 (swell partitions; tp estimated from the mean period),
-    hs/tm/dir (all waves), ww (wind-sea height), kt and wind_from (ERA5 10 m wind), cell, source.
+    hs/tm/dir (all waves), ww (wind-sea height), kt and wind_from (ERA5 10 m wind), tide (m, EOT20), cell, source.
     In California the waves come from CDIP's nearshore model (cdip.py) instead."""
     wp, vp = _waves_path(lat, lon), _wind_path(lat, lon)
     if not (wp.exists() and vp.exists()):
@@ -187,7 +187,8 @@ def mornings(lat, lon):
     with _open([_waves_path(lat, lon, True), wp]) as w:
         idx, days = _local_mornings(w.time.values, lon, 3)
         g = lambda v: w[v].values[idx].astype(float)
-        out = dict(day=days, cell=tuple(w.attrs["cell"]),
+        tide = tides.height(lat, lon, w.time.values[idx])
+        out = dict(day=days, cell=tuple(w.attrs["cell"]), tide=np.full(len(days), np.nan) if tide is None else tide,
                    hs1=g("VHM0_SW1"), tp1=g("VTM01_SW1") * TP_RATIO, dir1=g("VMDR_SW1"),
                    hs2=g("VHM0_SW2"), tp2=g("VTM01_SW2") * TP_RATIO, dir2=g("VMDR_SW2"),
                    hs=g("VHM0"), tm=g("VTM10"), dir=g("VMDR"), ww=g("VHM0_WW"))
@@ -200,6 +201,18 @@ def mornings(lat, lon):
     out["kt"] = np.where(hit, np.hypot(u, vv)[np.minimum(pos, len(wdays) - 1)] * KT, np.nan)
     out["wind_from"] = np.where(hit, (np.degrees(np.arctan2(-u, -vv)) % 360)[np.minimum(pos, len(wdays) - 1)], np.nan)
     out["source"] = "MFWAM ~8 km cell"
+
+    # Bend the offshore swell trains in to the break over the seafloor (refract.py), losses only. Off
+    # for now (config.REFRACT): it matches CDIP in California, but elsewhere ETOPO's seafloor is too
+    # coarse for reefs, points and canyons and it all but erases Puerto Escondido, the Mentawais,
+    # Chicama and Jeffreys Bay.
+    from . import refract
+
+    bend = refract.transfer(lat, lon, max_k=1.0) if config.REFRACT else None
+    if bend is not None:
+        for n in ("1", "2"):  # heights only: windows and exposure are judged on the offshore direction
+            out["hs" + n] = bend(out["hs" + n], out["tp" + n], out["dir" + n])[0]
+        out["source"] = "MFWAM ~8 km cell, refracted to the break"
 
     # California: CDIP's nearshore model replaces the offshore waves wherever it has the morning.
     from . import cdip
@@ -238,7 +251,7 @@ def typical_wind(s):
     return float(np.median(s["kt"])), float(np.bincount(sector, minlength=16).argmax() * 22.5)
 
 
-def summary(lat, lon, facing, months, relaxed=False):
+def summary(lat, lon, facing, months, relaxed=False, window=None):
     """One point over the calendar months: % good, mornings, the median good morning (hs, hb, tp,
     dir) and the typical wind, as analysis._merge; None until it is downloaded. relaxed applies
     the enclosed-sea standard to total waves (no wind test), as the map insets do."""
@@ -254,8 +267,8 @@ def summary(lat, lon, facing, months, relaxed=False):
         good = _relaxed(s["hs"], s["tm"], TP_RATIO) & rating.exposed(s["dir"], facing)
         hs, tp, d = s["hs"], s["tm"] * TP_RATIO, s["dir"]
     else:
-        good = rating.break_good(s, facing)
-        hs, tp, d = rating.good_swell(s, facing)
+        good = rating.break_good(s, facing, window=window)
+        hs, tp, d = rating.good_swell(s, facing, window)
     hs, tp, d = hs[good], tp[good], d[good]
     med = lambda a: float(np.median(a)) if len(a) else np.nan
     return dict(pct=100 * good.sum() / max(len(good), 1), days=len(good), hs=med(hs),

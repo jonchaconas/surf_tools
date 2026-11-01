@@ -5,27 +5,34 @@ or round a point is rated on swell that never reaches it as such. This module es
 between that cell and TARGET_DEPTH (10 m) off the break as a transfer table per point: for each
 offshore swell direction (every 5 degrees) and peak period (6-20 s), the height coefficient
 K = Kr * Ks and the direction the swell then comes from. In California CDIP's MOP model (cdip.py)
-does this properly, and validate() compares the two there.
+does this properly, and validate() compares the two there. Bathymetry is NOAA NCEI's ETOPO 2022
+(15 arc-second surface elevation, over THREDDS OPeNDAP, no login), cached per point in data/bathy/;
+tables go to data/refract/. `build()` makes both; `transfer(lat, lon)` applies a table.
 
 Method: backward ray tracing (Dorrestein 1960; O'Reilly & Guza 1993, as CDIP's MOP does). From the
 point nearest the break that is TARGET_DEPTH deep, a fan of rays (one every FAN degrees, all round)
-is traced out to sea through the smoothed ETOPO 2022 depth field, with linear dispersion for the
-phase speed and Snell's law (d heading / ds from the speed gradient across the ray). A ray stops
-when it is as far from its start as the offshore cell is (it then carries the offshore direction
-that feeds it) or when it runs aground or loops (blocked). Along a ray E(f, theta) * c * cg is
-conserved, so the nearshore spectrum is the offshore one read along the rays. For an offshore swell
-from D with a Gaussian spread SPREAD(T),
+is traced out to sea through the smoothed depth field, with linear dispersion for the phase speed
+and Snell's law (d heading / ds from the speed gradient across the ray). A ray ends once it is as
+far from its start as the model cell and as deep as it (or deep for its period), where the cell's
+waves apply; it then carries the offshore direction that feeds it. A ray that runs aground or loops
+is blocked. Along a ray E(f, theta) * c * cg is conserved, so the nearshore spectrum is the offshore
+one read along the rays. For an offshore swell from D with a Gaussian spread(T),
     K^2 = sum over rays of  spread(theta_offshore - D) * FAN * (c cg)_offshore / (c cg)_TARGET_DEPTH,
-which is Kr^2 Ks^2 for straight parallel contours, stays finite at caustics, and goes to 0 where every
-ray from that direction is blocked by land (a headland's shadow). The nearshore direction is the
-weighted mean of the rays' launch directions.
+which is Kr^2 Ks^2 for straight parallel contours (checked to ~1%), stays finite at caustics, and
+goes to 0 where every ray from that direction is blocked by land (a headland's shadow). The
+nearshore direction is the weighted mean of the rays' launch directions.
+
+Against CDIP at the nine California breaks, the refracted direction is far closer than the
+offshore one at eight (not Ocean Beach). The height fixes the sheltered breaks (Steamer Lane, Ventura, Malibu),
+but the gains at open beaches (shoaling, focusing on long-period swell) overshoot. So use it with
+max_k=1: the losses, not the gains.
 
 Assumptions and limitations: linear waves at the peak period only, no currents, diffraction, bottom
-friction or breaking. The offshore swell is taken as uniform round the circle where rays stop, so
-islands farther out than the model cell are left to the model. ETOPO's 15 arc-second (~460 m) grid,
-smoothed by another cell, blurs reefs, channels and the shape of the 10 m contour, which outside
-surveyed coasts is often interpolated. The directional spread is assumed (wider for shorter periods),
-not read from the model, and narrow swell windows are sensitive to it.
+friction or breaking. The offshore swell is taken as uniform where the rays end, so islands beyond
+that are left to the model. ETOPO's 15 arc-second (~460 m) grid, smoothed by another cell, blurs
+reefs, canyons and the 10 m contour; it is best on surveyed coasts (as in California) and often
+interpolated elsewhere, occasionally walling off a bay (transfer() then returns None). The
+directional spread is assumed (narrower for longer periods), not read from the model.
 """
 
 import json
@@ -36,6 +43,7 @@ from functools import lru_cache
 
 import numpy as np
 import requests
+import xarray as xr
 from scipy.ndimage import gaussian_filter
 
 from . import config, points
@@ -57,10 +65,16 @@ FAN = 0.25        # degrees between rays leaving the break
 STEP = 100.0      # m along each ray (Runge-Kutta midpoint)
 SMOOTH = 1.0      # Gaussian smoothing of the depth grid, in cells: rays need a smooth speed gradient
 MIN_REACH = 3000  # m: rays run at least this far even when the model cell is nearer
+MAX_REACH = 35000  # m: and stop by this far (inside the bathymetry box) however shallow it still is
 DRY = 0.5         # m: a ray in water shallower than this has run aground
+# A named break that rays say gets almost nothing from its whole swell window (12 s swell within
+# config.EXPOSURE of its facing) means a bathymetry artefact, such as a bay ETOPO has walled off.
+MIN_WINDOW_K = 0.3
 
 # Lakes' surface heights above sea level, since ETOPO gives their beds: (lat0, lat1, lon0, lon1, m).
-LEVELS = [(46.3, 49.1, -92.4, -84.3, 183.4),   # Lake Superior
+LEVELS = [(41.3, 42.95, -83.6, -78.8, 174.3),  # Lake Erie
+          (43.15, 44.3, -79.9, -76.0, 74.8),   # Lake Ontario
+          (46.3, 49.1, -92.4, -84.3, 183.4),   # Lake Superior
           (41.5, 46.2, -88.1, -79.7, 176.4),   # Lakes Michigan and Huron
           (36.5, 47.5, 46.5, 55.5, -27.5)]     # Caspian Sea
 
@@ -218,10 +232,11 @@ def _turn(v, phi):
     return (np.sin(phi) * v[:, 2] - np.cos(phi) * v[:, 1]) / v[:, 0]
 
 
-def trace(x, y, h, sx, sy, reach):
-    """Trace the fan of rays from (sx, sy) out to sea for every period. Returns launch headings
-    (degrees, the direction waves arrive from at the start) and, per [period, ray], the heading and
-    depth where the ray got `reach` metres away: NaN where it ran aground, looped or left the grid."""
+def trace(x, y, h, sx, sy, reach, deep):
+    """Trace the fan of rays from (sx, sy) out to sea for every period. A ray ends once it is `reach`
+    metres away and deep[period] metres deep (or MAX_REACH away). Returns launch headings (degrees,
+    the direction waves arrive from at the start) and, per [period, ray], the heading and depth where
+    the ray ended: NaN where it ran aground, looped or left the grid."""
     dx, dy = x[1] - x[0], y[1] - y[0]
     F = _fields(h, dx, dy)
     launch = np.arange(0, 360, FAN)
@@ -230,10 +245,12 @@ def trace(x, y, h, sx, sy, reach):
     px, py = np.full(phi.shape, float(sx)), np.full(phi.shape, float(sy))
     end_dir, end_h = np.full(phi.shape, np.nan), np.full(phi.shape, np.nan)
     live = np.arange(len(phi))
-    for _ in range(int(3 * reach / STEP)):
+    deep = np.asarray(deep, float)
+    for _ in range(int(2 * MAX_REACH / STEP)):
         v, inside = _sample(F, p[live], px[live], py[live], x[0], y[0], dx, dy)
         wet = inside & (v[:, 3] >= DRY)
-        out = np.hypot(px[live] - sx, py[live] - sy) >= reach
+        far = np.hypot(px[live] - sx, py[live] - sy)
+        out = ((far >= reach) & (v[:, 3] >= deep[p[live]])) | (far >= MAX_REACH)
         done = live[out & wet]
         end_dir[done], end_h[done] = np.degrees(phi[done]) % 360, v[out & wet, 3]
         keep = ~out & wet
@@ -277,8 +294,12 @@ def table(lat, lon, facing, cell, at=None, depth=TARGET_DEPTH, spread_of=spread)
     sx, sy = _start(x, y, h, px, py, facing, depth)
     cx, cy = _xy(cell[0], cell[1], lat, lon)
     reach = max(float(np.hypot(cx - sx, cy - sy)), MIN_REACH)
-    K, near = coefficients(*trace(x, y, h, sx, sy, reach), depth, spread_of)
-    return dict(lat=lat, lon=lon, cell=[float(v) for v in cell], depth=depth,
+    # Rays end as deep as the model cell, where its waves apply, or in deep water for their period.
+    deep = np.clip(_depth_at(x, y, h, cx, cy), depth, G * PERIODS ** 2 / (4 * np.pi))
+    K, near = coefficients(*trace(x, y, h, sx, sy, reach, deep), depth, spread_of)
+    window = np.abs((DIRS - facing + 180) % 360 - 180) <= config.EXPOSURE
+    return dict(lat=lat, lon=lon, facing=facing, cell=[float(v) for v in cell], depth=depth,
+                window_k=round(float(K[window][:, PERIODS == 12].max()), 3),
                 start=[round(lat + sy / M_PER_DEG, 5), round(lon + sx / (M_PER_DEG * np.cos(np.radians(lat))), 5)],
                 start_offset_m=round(float(np.hypot(sx - px, sy - py))), reach_km=round(reach / 1000, 2),
                 dirs=DIRS.tolist(), periods=PERIODS.tolist(), K=np.round(K, 3).tolist(),
@@ -286,8 +307,6 @@ def table(lat, lon, facing, cell, at=None, depth=TARGET_DEPTH, spread_of=spread)
 
 
 def _cell(lat, lon):
-    import xarray as xr
-
     with xr.open_dataset(points._waves_path(lat, lon)) as w:
         return tuple(float(v) for v in w.attrs["cell"])
 
@@ -318,9 +337,9 @@ def build(workers=4, force=False):
     print(f"tables for {done} points: {time.time() - t0:.0f} s", flush=True)
 
 
-def _apply(t):
-    """A function (hs, tp, dir) offshore -> (hs, dir) nearshore from a table dict."""
-    K = np.array(t["K"], float)
+def _apply(t, max_k=None):
+    """A function (hs, tp, dir) offshore -> (hs, dir) nearshore from a table dict, with K capped at max_k."""
+    K = np.minimum(np.array(t["K"], float), max_k or np.inf)
     near = np.array([[np.nan if d is None else d for d in row] for row in t["dir"]], float)
     E = K * K  # direction vectors weighted by energy interpolate smoothly into a shadow
     u, v = np.nan_to_num(E * np.sin(np.radians(near))), np.nan_to_num(E * np.cos(np.radians(near)))
@@ -346,11 +365,16 @@ def _apply(t):
 
 
 @lru_cache(maxsize=None)
-def transfer(lat, lon):
+def transfer(lat, lon, max_k=None):
     """(hs, tp, dir) offshore at the point's model cell -> (hs, dir) at TARGET_DEPTH off the break,
     as a vectorised function, or None until build() has made its table. Periods outside PERIODS
-    take the nearest column."""
-    return _apply(json.loads(_path(lat, lon).read_text())) if _path(lat, lon).exists() else None
+    take the nearest column. max_k=1 keeps the losses (shadows, spreading) but not the gains
+    (shoaling, focusing), which hang on bathymetric detail ETOPO lacks; see validate(). Also None
+    where the table blocks the break's whole window (MIN_WINDOW_K), so callers keep the raw waves."""
+    if not _path(lat, lon).exists():
+        return None
+    t = json.loads(_path(lat, lon).read_text())
+    return _apply(t, max_k) if t["window_k"] >= MIN_WINDOW_K else None
 
 
 # --- Validation against CDIP MOP in California ----------------------------------------------
@@ -367,22 +391,25 @@ def _offshore(lat, lon):
 
 
 def _stats(s, facing):
-    """Swell Hs (two trains combined), dominant direction and the share of mornings with a train
-    of 4 ft over 9 s, for one source's trains."""
+    """For one source's two trains: swell Hs (combined), dominant direction, the share of mornings
+    with a train of 4 ft over 9 s (big; big_win also within the break's window) and the mornings
+    whose swell passes the good+ test (rating.swell_ok)."""
     from . import rating
 
     h1, h2 = np.nan_to_num(s["hs1"]), np.nan_to_num(s["hs2"])
     dom = np.where(h2 > h1, s["dir2"], s["dir1"])
     big = lambda k, win: ((s[f"hs{k}"] >= config.MIN_SWELL_HEIGHT) & (s[f"tp{k}"] > config.MIN_SWELL_PERIOD)
                           & (rating.exposed(s[f"dir{k}"], facing) if win else True))
+    ok = rating.swell_ok(s["hs1"], s["tp1"], s["dir1"], facing) | rating.swell_ok(s["hs2"], s["tp2"], s["dir2"], facing)
     return dict(hs=np.hypot(h1, h2), dir=dom, big=100 * (big(1, False) | big(2, False)).mean(),
-                big_win=100 * (big(1, True) | big(2, True)).mean())
+                big_win=100 * (big(1, True) | big(2, True)).mean(), ok=ok)
 
 
-def validate(at_site=False, spread_of=spread):
+def validate(max_k=None, at_site=False, spread_of=spread):
     """Compare raw offshore and refracted Copernicus swell with CDIP MOP at each California break,
-    over the same mornings; prints a table and returns its rows. at_site=True starts the rays at
-    the CDIP site and depth (on the fly) rather than using the break's saved table."""
+    over the same mornings; prints a table and returns its rows. "agree" is the share of mornings on
+    which the good+ swell test gives CDIP's answer. at_site=True starts the rays at the CDIP site
+    and depth (on the fly) rather than using the break's saved table."""
     from . import cdip
 
     rows = []
@@ -391,16 +418,14 @@ def validate(at_site=False, spread_of=spread):
         if near is None:
             continue
         if at_site or spread_of is not spread:
-            import xarray as xr
-
             with xr.open_dataset(cdip._path(near["site"])) as d:
                 site = (d.attrs["lat"], d.attrs["lon"]) if at_site else None
                 depth = d.attrs["depth"] if at_site else TARGET_DEPTH
-            f = _apply(table(lat, lon, facing, _cell(lat, lon), site, depth, spread_of))
+            f = _apply(table(lat, lon, facing, _cell(lat, lon), site, depth, spread_of), max_k)
         else:
-            f = transfer(lat, lon)
+            f = transfer(lat, lon, max_k)
         off = _offshore(lat, lon)
-        days, io, ic = np.intersect1d(off["day"], near["day"], return_indices=True)
+        _, io, ic = np.intersect1d(off["day"], near["day"], return_indices=True)
         o = {k: v[io] for k, v in off.items() if k != "day"}
         c = {k: near[k][ic] for k in ("hs1", "tp1", "dir1", "hs2", "tp2", "dir2")}
         keep = np.isfinite(o["hs1"]) & np.isfinite(c["hs1"])
@@ -416,13 +441,14 @@ def validate(at_site=False, spread_of=spread):
             ddir = np.abs((s["dir"] - sc["dir"] + 180) % 360 - 180)[swell]
             row.update({f"{tag}_bias": err.mean(), f"{tag}_rmse": np.sqrt((err ** 2).mean()),
                         f"{tag}_r": np.corrcoef(s["hs"], sc["hs"])[0, 1], f"{tag}_ddir": np.nanmedian(ddir),
-                        tag: s["big"], f"{tag}_win": s["big_win"]})
+                        tag: s["big"], f"{tag}_win": s["big_win"], f"{tag}_agree": 100 * (s["ok"] == sc["ok"]).mean()})
         rows.append(row)
     head = ("break", "site", "n", "bias raw", "bias ref", "rmse raw", "rmse ref", "r raw", "r ref",
-            "ddir raw", "ddir ref", "%4ft CDIP", "raw", "raw(win)", "ref")
-    print(("{:18} {:6} {:>5}" + " {:>8}" * 12).format(*head))
+            "ddir raw", "ddir ref", "%4ft CDIP", "raw", "raw(win)", "ref", "agree raw", "agree ref")
+    print(("{:18} {:6} {:>5}" + " {:>8}" * 14).format(*head))
     for w in rows:
-        print(("{:18} {:6} {:5d}" + " {:8.2f}" * 6 + " {:8.0f}" * 2 + " {:8.1f}" * 4).format(
+        print(("{:18} {:6} {:5d}" + " {:8.2f}" * 6 + " {:8.0f}" * 2 + " {:8.1f}" * 6).format(
             w["name"], w["site"], w["n"], w["raw_bias"], w["ref_bias"], w["raw_rmse"], w["ref_rmse"],
-            w["raw_r"], w["ref_r"], w["raw_ddir"], w["ref_ddir"], w["cdip"], w["raw"], w["raw_win"], w["ref"]))
+            w["raw_r"], w["ref_r"], w["raw_ddir"], w["ref_ddir"], w["cdip"], w["raw"], w["raw_win"], w["ref"],
+            w["raw_agree"], w["ref_agree"]))
     return rows
