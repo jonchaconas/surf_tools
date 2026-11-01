@@ -69,35 +69,47 @@ def _pack(hists, n):
     return base64.b64encode(gzip.compress(body, 6)).decode("ascii")
 
 
+def _sector(frm):
+    """Which of 16 compass sectors (0 = N) the waves come from; NaN -> 0 (those bins never pass)."""
+    return (np.floor((np.nan_to_num(frm) % 360 + 11.25) / 22.5).astype(np.int32)) % 16
+
+
 def _grid(stride):
-    """Ocean cells from WW3 (every stride-th 1 degree cell) plus the enclosed-sea points."""
+    """Ocean cells from WW3 (every stride-th 1 degree cell) plus the enclosed-sea points, each with
+    plain histograms and direction-split ones (code * 16 + sector) for the coastal band."""
     per_month, lat, lon = [], None, None
     for m in range(1, 13):
         ds = ww3.load(m).isel(lat=slice(None, None, stride), lon=slice(None, None, stride))
         hs, tp, ws = ds.shgt.values, ds.sper.values, ds.whgt.values
         lat, lon = ds.lat.values, ds.lon.values
-        per_month.append((_codes(hs, tp, ws), rating.has_sea(hs, ws)))
+        code = _codes(hs, tp, ws)
+        per_month.append((code, code * 16 + _sector(ds.sdir.values), rating.has_sea(hs, ws)))
         print(f"  grid month {m}", flush=True)
-    days = sum(v.sum(0) for _, v in per_month)
+    days = sum(v.sum(0) for _, _, v in per_month)
     keep = np.argwhere(days > 0.5 * days.max())
-    cells = [dict(lat=float(lat[i]), lon=float(lon[j]), size=float(stride), kind="ocean") for i, j in keep]
-    hists = [[_hist(c[:, i, j], v[:, i, j]) for c, v in per_month] for i, j in keep]
+    cells = [dict(lat=float(lat[i]), lon=float(lon[j]), size=float(stride), kind="ocean", basin=None)
+             for i, j in keep]
+    hists = [[_hist(c[:, i, j], v[:, i, j]) for c, _, v in per_month] for i, j in keep]
+    dhists = [[_hist(d[:, i, j], v[:, i, j]) for _, d, v in per_month] for i, j in keep]
 
-    tp_ratio = inland.TP_RATIO
     basins = [inland.load(m) for m in range(1, 13)]
     for name, (spacing, *_) in inland.BASINS.items():
         if any(name not in b for b in basins):
             continue
         b0 = basins[0][name]
         for k in range(len(b0["lat"])):
-            per = []
+            per, dper = [], []
             for b in (bm[name] for bm in basins):
                 hs = b["wave_hs"][k]
-                per.append(_hist(_codes(hs, b["wave_tm"][k] * b["ratio"]), np.isfinite(hs)))
+                code = _codes(hs, b["wave_tm"][k] * b["ratio"])
+                per.append(_hist(code, np.isfinite(hs)))
+                dper.append(_hist(code * 16 + _sector(b["wave_dir"][k]), np.isfinite(hs)))
             if sum(p[2] for p in per):
-                cells.append(dict(lat=float(b0["lat"][k]), lon=float(b0["lon"][k]), size=spacing, kind="enclosed"))
+                cells.append(dict(lat=float(b0["lat"][k]), lon=float(b0["lon"][k]), size=spacing, kind="enclosed",
+                                  basin=name))
                 hists.append(per)
-    return cells, hists
+                dhists.append(dper)
+    return cells, hists, dhists
 
 
 def _points():
@@ -191,20 +203,178 @@ def _land():
     return {"type": "Feature", "properties": {}, "geometry": gj}
 
 
+RASTER = analysis.RES   # 0.25 degrees: the page's smoothed field and coastal band live on this grid
+COAST_DEG = 0.75        # water this close to land is "coast" and judged by its own exposure
+RAY_KM, BASIN_RAY_KM, LAND_RES = 200, 100, 0.05   # open water a sector needs; enclosed seas build waves over shorter fetch
+
+
+def _land_raster():
+    """Land at LAND_RES degrees (Great Lakes and Caspian as water), for casting exposure rays."""
+    from PIL import Image, ImageDraw
+
+    from .plot import _land as land_feature
+
+    w, h = int(360 / LAND_RES), int(180 / LAND_RES)
+    img = Image.new("1", (w, h), 0)
+    draw = ImageDraw.Draw(img)
+    to_px = lambda ring: [((x + 180) / LAND_RES, (90 - y) / LAND_RES) for x, y in ring.coords]
+    geom = next(iter(land_feature().geometries()))
+    for poly in getattr(geom, "geoms", [geom]):
+        draw.polygon(to_px(poly.exterior), fill=1)
+        for hole in poly.interiors:
+            draw.polygon(to_px(hole), fill=0)
+    return np.array(img, dtype=bool)
+
+
+def _open_sectors(lat, lon, land, ray_km):
+    """16-bit masks: bit k set when swell from sector k (k * 22.5 degrees, 0 = N) can reach the point,
+    i.e. at least two of three rays across that sector run ray_km (per point) over water. Bays,
+    headlands and offshore islands close the sectors they block."""
+    steps = np.arange(5, RAY_KM + 1, 5)
+    within = steps[None, :] <= np.asarray(ray_km)[:, None]
+    h, w = land.shape
+    mask = np.zeros(len(lat), np.uint16)
+    coslat = np.cos(np.radians(lat))[:, None]
+    for k in range(16):
+        clear = np.zeros(len(lat), np.int32)
+        for off in (-7.5, 0.0, 7.5):
+            th = np.radians(k * 22.5 + off)
+            la = lat[:, None] + steps[None, :] * np.cos(th) / 111.2
+            lo = lon[:, None] + steps[None, :] * np.sin(th) / (111.2 * np.maximum(coslat, 0.05))
+            r = np.clip(((90 - la) / LAND_RES).astype(int), 0, h - 1)
+            c = ((lo + 180) / LAND_RES).astype(int) % w
+            clear += ~(land[r, c] & within).any(axis=1)
+        mask |= ((clear >= 2) << k).astype(np.uint16)
+    return mask
+
+
+def _raster(cells, res, dhists):
+    """Everything the page needs to draw a smooth field that follows the coast, on the 0.25 degree grid:
+    cat: 0 ocean (interpolate the ocean grid), 1 enclosed sea (inverse-distance from its own points),
+         2 water no source reaches (shown as no data), 3 land.
+    The coastal band (water within COAST_DEG of land) overrides that with each pixel's own exposure:
+    swell only counts from sectors open to it, read from its nearest seaward source cell. Its weight
+    (alpha) fades from 1 at the shore toward the band's outer edge, so it meets the open-water field
+    without a seam. A strip of land along the shore copies the nearest coastal value, so contours
+    meet the coastline."""
+    from scipy.ndimage import binary_dilation, distance_transform_edt
+    from scipy.spatial import cKDTree
+    from shapely import contains_xy
+
+    from .discover import _bearing, _xyz
+
+    LAT, LON = analysis.LAT, analysis.LON
+    nlat, nlon = len(LAT), len(LON)
+    la, lo = np.meshgrid(LAT, LON, indexing="ij")
+    water = analysis.water_mask()
+
+    ocean = [i for i, c in enumerate(cells) if c["kind"] == "ocean"]
+    otree = cKDTree(_xyz(np.array([cells[i]["lat"] for i in ocean]), np.array([cells[i]["lon"] for i in ocean])))
+    reach = 1.5 * res * 111.2
+    near = otree.query(_xyz(la.ravel(), lo.ravel()))[0].reshape(nlat, nlon) * 6371 <= reach
+
+    cat = np.where(water, 0, 3).astype(np.uint8)
+    basin_of = np.full((nlat, nlon), -1, np.int16)
+    names = [n for n in inland.BASINS if any(c["basin"] == n for c in cells)]
+    bpix, bnb, bw = [], [], []
+    for bi, name in enumerate(names):
+        inside = binary_dilation(contains_xy(inland.geometries()[name], lo, la), iterations=4)
+        basin_of[inside & (basin_of < 0)] = bi
+        members = [i for i, c in enumerate(cells) if c["basin"] == name]
+        ii = np.flatnonzero(inside.ravel())
+        cl = np.cos(np.radians(np.mean([cells[i]["lat"] for i in members])))
+        pts = np.array([[cells[i]["lat"], cells[i]["lon"] * cl] for i in members])
+        k = min(4, len(members))
+        d, j = cKDTree(pts).query(np.c_[la.ravel()[ii], lo.ravel()[ii] * cl], k=k)
+        d, j = d.reshape(len(ii), k), j.reshape(len(ii), k)
+        wgt = 1 / np.maximum(d, 0.05) ** 2
+        wgt /= wgt.sum(1, keepdims=True)
+        for p, jj, ww in zip(ii, j, wgt):
+            bpix.append(int(p))
+            bnb.extend([members[x] for x in jj] + [members[jj[0]]] * (4 - k))
+            bw.extend([round(float(x), 4) for x in ww] + [0.0] * (4 - k))
+        cat[inside & water] = 1
+    cat[water & ~near & (basin_of < 0)] = 2
+
+    # Coastal band: exposure per pixel, then its nearest seaward source.
+    to_land = distance_transform_edt(water)  # in pixels
+    coast = water & (to_land * RASTER <= COAST_DEG) & (cat != 2)
+    ci = np.flatnonzero(coast.ravel())
+    clat, clon = la.ravel()[ci], lo.ravel()[ci]
+    in_basin = basin_of.ravel()[ci]
+    print(f"  coastal pixels: {len(ci)}; casting exposure rays", flush=True)
+    masks = _open_sectors(clat, clon, _land_raster(), np.where(in_basin >= 0, BASIN_RAY_KM, RAY_KM))
+    src = np.full(len(ci), -1, np.int32)
+    dist, cand = otree.query(_xyz(clat, clon), k=8)
+    for n in range(len(ci)):
+        if in_basin[n] >= 0:
+            members = [i for i, c in enumerate(cells) if c["basin"] == names[in_basin[n]]]
+            ml = np.array([cells[i]["lat"] for i in members])
+            mo = np.array([cells[i]["lon"] for i in members])
+            order = np.argsort((ml - clat[n]) ** 2 + ((mo - clon[n]) * np.cos(np.radians(clat[n]))) ** 2)[:8]
+            options = [(members[o], ml[o], mo[o]) for o in order]
+        else:
+            options = [(ocean[c], cells[ocean[c]]["lat"], cells[ocean[c]]["lon"])
+                       for c, dd in zip(cand[n], dist[n]) if dd * 6371 <= reach]
+        if not options:
+            continue
+        src[n] = options[0][0]
+        for cell, olat, olon in options:  # prefer a source out through an open sector
+            sector = int(((_bearing(clat[n], clon[n], olat, olon) + 11.25) % 360) // 22.5)
+            if masks[n] >> sector & 1:
+                src[n] = cell
+                break
+    band = COAST_DEG / RASTER
+    alpha = np.clip((band + 0.5 - to_land.ravel()[ci]) / (band - 1), 0, 1)
+    ok = src >= 0
+    ci, masks, src, alpha = ci[ok], masks[ok], src[ok], alpha[ok]
+    sources = sorted(set(src.tolist()))
+    sidx = {c: k for k, c in enumerate(sources)}
+
+    # Land strip along the shore copies the nearest coastal pixel.
+    is_coast = np.zeros(nlat * nlon, bool)
+    is_coast[ci] = True
+    d, (ri, rj) = distance_transform_edt(~is_coast.reshape(nlat, nlon), return_indices=True)
+    fringe = np.flatnonzero(((cat == 3) & (d <= 2)).ravel())
+    nearest = (ri * nlon + rj).ravel()[fringe]
+    pos = np.full(nlat * nlon, -1, np.int64)
+    pos[ci] = np.arange(len(ci))
+    fringe_to = pos[nearest]
+    keep = fringe_to >= 0
+    fringe, fringe_to = fringe[keep], fringe_to[keep]
+
+    coast_bin = (ci.astype(np.uint32).tobytes() + fringe.astype(np.uint32).tobytes()
+                 + fringe_to.astype(np.uint32).tobytes()
+                 + np.array([sidx[c] for c in src], np.uint16).tobytes() + masks.astype(np.uint16).tobytes()
+                 + np.round(alpha * 255).astype(np.uint8).tobytes())
+    print(f"  coastal band: {len(ci)} pixels, {len(fringe)} shore strip, {len(sources)} source cells", flush=True)
+    return dict(
+        res=RASTER, nlat=nlat, nlon=nlon,
+        cat=base64.b64encode(gzip.compress(cat.tobytes(), 9)).decode("ascii"),
+        basin=dict(pix=bpix, nb=bnb, w=bw),
+        coast=dict(n=len(ci), fringe=len(fringe), sources=sources,
+                   data=base64.b64encode(gzip.compress(coast_bin, 9)).decode("ascii")),
+    ), _pack([dhists[c] for c in sources], len(sources))
+
+
 def export(res=2):
-    """Write web/data/{meta.json, grid.b64.txt, points.b64.txt, land.json}."""
+    """Write web/data/{meta.json, grid.b64.txt, points.b64.txt, coast.b64.txt, land.json, raster.json}."""
     OUT.mkdir(parents=True, exist_ok=True)
-    cells, grid = _grid(int(res))
+    cells, grid, dgrid = _grid(int(res))
     (OUT / "grid.b64.txt").write_text(_pack(grid, len(cells)))
     points, pts = _points()
     (OUT / "points.b64.txt").write_text(_pack(pts, len(points)))
     (OUT / "land.json").write_text(json.dumps(_land(), separators=(",", ":")))
+    raster, coast = _raster(cells, res, dgrid)
+    (OUT / "raster.json").write_text(json.dumps(raster, separators=(",", ":")))
+    (OUT / "coast.b64.txt").write_text(coast)
     meta = dict(
         generated=date.today().isoformat(), res=res,
         seasons={m: list(config.seasons(m)) for m in range(1, 13)},
         bins=dict(height_ft=H_BINS, period_s=T_BINS, period_start=5, clean=CLEAN, angle=ANGLE),
         cells=dict(lat=[c["lat"] for c in cells], lon=[c["lon"] for c in cells],
                    size=[c["size"] for c in cells], enclosed=[c["kind"] == "enclosed" for c in cells]),
+        ocean_res=res,
         points=points,
     )
     (OUT / "meta.json").write_text(json.dumps(meta, separators=(",", ":"), default=float))

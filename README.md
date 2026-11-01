@@ -41,9 +41,20 @@ Breakout tables are listed by year-round consistency.
 [`web/index.html`](web/index.html) is an interactive version of the PDF:
 
 - **Map:** zoom and pan the world map, and switch between year-round, the half years or any
-  single month.
-- **Click anywhere:** a named break, an under-the-radar stretch, a regional coast or any patch
-  of ocean shows its month-by-month chart, typical good morning, tide range and morning wind.
+  single month. The contours are drawn from a smooth 0.25° field that runs right up to the
+  coastline.
+- **Coast that faces the right way:** within about 80 km of land, each 0.25° pixel counts swell
+  only from the compass directions that reach open water from it: 200 km of it, or 100 km in
+  lakes and enclosed seas. Bays, headlands and offshore islands therefore shelter the coast
+  behind them. For example, the Channel Islands shadow much of Southern California, and
+  Chesapeake Bay and Puget Sound come out flat.
+- **Click anywhere:** a click shows a month-by-month chart for whatever it lands on:
+  - a named break, an under-the-radar stretch or a regional coast, with its typical good
+    morning, tide range and morning wind;
+  - any stretch of coast, with a compass rose of the directions it is open to;
+  - any patch of ocean.
+
+  A click inland snaps to the nearest coast.
 - **Your own definition of good:** set minimum swell size and period, the long-period
   alternative, the largest surf you want, how much wind chop to allow, and how directly a break
   must face the swell. The map and the best-spots list update as you go. Presets include
@@ -51,8 +62,12 @@ Breakout tables are listed by year-round consistency.
 
 To make this work in a browser, each month's mornings are pre-counted into bins of swell height ×
 period × chop (plus an angle-to-the-shore bin for named coasts) by
-[`surfmap/export.py`](surfmap/export.py). Any criteria then reduce to sums over bins. The data in
-`web/data/` is on a 2° ocean grid, about 13 MB.
+[`surfmap/export.py`](surfmap/export.py). Any criteria then reduce to sums over bins. For the
+coastal band, the counts are also split by the compass direction the swell comes from.
+
+The data in `web/data/` is about 18 MB. It holds a 2° ocean grid, the enclosed-sea points, and
+the 0.25° coastal band. For each coastal pixel, the band records which directions are open
+(found by casting rays over a 0.05° land mask) and which model cell it reads.
 
 Run it locally, at 1° resolution, with buttons to download new data and rebuild the PDF:
 

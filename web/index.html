@@ -7,17 +7,17 @@
    the criteria, the ranked spots and the selected spot. Stacks map-over-panel on phones. */
 :root {
   --paper: #f3f6f5; --panel: #ffffff; --ink: #13222b; --muted: #5a6a72; --rule: #d6dedd;
-  --water: #e9f0f1; --land: #d9ddd6; --coast: #8d978f; --accent: #0b7480; --accent-ink: #ffffff;
+  --water: #e9f0f1; --land: #d9ddd6; --coast: #8d978f; --nodata: #b8c2c4; --accent: #0b7480; --accent-ink: #ffffff;
   --display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
   --data: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
   --paper: #0d1418; --panel: #131c21; --ink: #e4ecee; --muted: #93a3aa; --rule: #26343b;
-  --water: #101a20; --land: #27323a; --coast: #56656d; --accent: #3fb6c2; --accent-ink: #062126; color-scheme: dark } }
+  --water: #101a20; --land: #27323a; --coast: #56656d; --nodata: #3a4950; --accent: #3fb6c2; --accent-ink: #062126; color-scheme: dark } }
 :root[data-theme="dark"] {
   --paper: #0d1418; --panel: #131c21; --ink: #e4ecee; --muted: #93a3aa; --rule: #26343b;
-  --water: #101a20; --land: #27323a; --coast: #56656d; --accent: #3fb6c2; --accent-ink: #062126; color-scheme: dark }
+  --water: #101a20; --land: #27323a; --coast: #56656d; --nodata: #3a4950; --accent: #3fb6c2; --accent-ink: #062126; color-scheme: dark }
 
 html, body { height: 100%; }
 [hidden] { display: none !important; }  /* also when served locally, without the host's reset */
@@ -67,6 +67,8 @@ select { font: 14px var(--body); color: var(--ink); background: var(--panel); bo
 .facts dd { margin: 0; font-family: var(--data); font-size: 12.5px; }
 svg.bars text { font: 10px var(--data); fill: var(--muted); }
 svg.bars text.v { fill: var(--ink); }
+svg.rose { flex: none; }
+svg.rose text { font: 600 8px var(--data); fill: var(--muted); }
 
 ol.top { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 ol.top li button { width: 100%; display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: baseline; text-align: left;
@@ -105,14 +107,14 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
         <div><strong id="hintperiod">Year-round</strong> · share of mornings that are good by your criteria</div>
         <div class="legend" id="legend"></div>
         <div class="legend-labels" id="legendlabels"></div>
-        <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast · click anywhere</div>
+        <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast &nbsp; <span class="swatch" style="background:var(--nodata)"></span>no data · click anywhere</div>
       </div>
       <div class="loading" id="loading">Loading the model data…</div>
     </div>
     <aside>
       <section class="block detail" id="detail" aria-live="polite">
         <h2>Selected</h2>
-        <p class="detail-empty">Click a break, a stretch of coast or any patch of ocean to see its month-by-month chart.</p>
+        <p class="detail-empty">Click a break, any stretch of coast or any patch of ocean to see its month-by-month chart.</p>
       </section>
 
       <section class="block">
@@ -144,6 +146,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
             <option value="3">±75°</option><option value="4">±90°</option><option value="5">Any direction</option>
           </select>
         </label>
+        <p class="note">Along the coast, the map counts only swell from directions that reach open water: at least 200 km of it (100 km in lakes and enclosed seas) before hitting land, so bays, headlands and islands shelter the coast behind them. The angle setting applies to the marked breaks.</p>
         <p class="note">Each day is judged on one model snapshot near 08:00 local time. Heights are the swell's significant height in feet; in the Great Lakes, Mediterranean, Black Sea and Caspian (and their regional coasts) total waves are used instead, and the chop setting doesn't apply there.</p>
       </section>
 
@@ -177,6 +180,7 @@ const FT = 3.28084, G = 9.81;
 const LEVELS = [0, 2, 5, 10, 15, 20, 30, 40, 50, 60, 80, 100];
 const COLORS = ["#d73027", "#f46d43", "#fdae61", "#fee08b", "#ffffbf", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837", "#00441b"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const P16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
 const PERIODS = [
   { id: "year", label: "Year-round", months: [1,2,3,4,5,6,7,8,9,10,11,12] },
   { id: "octmar", label: "Oct–Mar", months: [10,11,12,1,2,3] },
@@ -192,16 +196,15 @@ const PRESETS = [
 ];
 const crit = { ...PRESETS[0] };
 let period = PERIODS[0];
-let meta, land, grid, pts, selected = null, transform = d3.zoomIdentity;
+let meta, land, grid, pts, coastBins, R, selected = null, transform = d3.zoomIdentity;
 
 const colorFor = p => !isFinite(p) ? null : COLORS[Math.min(COLORS.length - 1, Math.max(0, d3.bisectRight(LEVELS, p) - 1))];
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const latlon = (lat, lon, d = 1) => `${Math.abs(lat).toFixed(d)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(d)}°${lon >= 0 ? "E" : "W"}`;
 
 // ---------- data ----------
-async function bytes(url) {  // base64 text of gzip-compressed binary (see surfmap/export.py)
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${url}: ${r.status}`);
-  const text = atob((await r.text()).trim());
+async function inflate(b64) {  // base64 text of gzip-compressed binary (see surfmap/export.py)
+  const text = atob(b64.trim());
   let buf = new Uint8Array(text.length);
   for (let i = 0; i < text.length; i++) buf[i] = text.charCodeAt(i);
   if (buf[0] === 0x1f && buf[1] === 0x8b) {
@@ -209,6 +212,16 @@ async function bytes(url) {  // base64 text of gzip-compressed binary (see surfm
     buf = new Uint8Array(await new Response(s).arrayBuffer());
   }
   return buf.buffer;
+}
+async function bytes(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  return inflate(await r.text());
+}
+async function json(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: ${r.status}`);
+  return r.json();
 }
 function unpack(buffer, n) {
   const days = new Uint16Array(buffer, 0, n * 12);
@@ -251,6 +264,15 @@ function share(store, lut, e, months) {
   }
   return days ? (100 * good) / days : NaN;
 }
+function shareIf(store, e, months, pass) {
+  let good = 0, days = 0;
+  for (const m of months) {
+    const i = e * 12 + m - 1;
+    days += store.days[i];
+    for (let k = store.start[i]; k < store.start[i + 1]; k++) if (pass(store.codes[k])) good += store.counts[k];
+  }
+  return days ? (100 * good) / days : NaN;
+}
 let cellPct, pointPct, lut;
 function recompute() {
   lut = luts();
@@ -258,51 +280,194 @@ function recompute() {
   for (let e = 0; e < grid.n; e++) cellPct[e] = share(grid, lut.g, e, period.months);
   pointPct = new Float32Array(pts.n);
   for (let e = 0; e < pts.n; e++) pointPct[e] = share(pts, lut.p, e, period.months);
-  draw(); renderTop(); renderDetail();
+  computeField(); draw(); renderTop(); renderDetail();
+}
+
+// ---------- the field: a smooth surface on a 0.25° raster that follows the coast ----------
+// Open ocean interpolates the model grid and enclosed seas blend their own points. The coastal
+// band (water within ~80 km of land) reads its nearest seaward model cell but counts only swell
+// from the compass sectors that reach open water from that pixel, so bays, headlands and islands
+// shelter what they block. A strip of land along the shore copies the nearest coastal pixel, so
+// the contours run right up to the coastline. See surfmap/export.py (_raster).
+let F, ocean, fieldVersion = 0;
+function setupRaster(r, cat, cbuf) {
+  const n = r.coast.n, f = r.coast.fringe, N = r.nlat * r.nlon;
+  R = { res: r.res, nlat: r.nlat, nlon: r.nlon, cat, basin: r.basin, sources: r.coast.sources,
+    pix: new Uint32Array(cbuf, 0, n), fringe: new Uint32Array(cbuf, 4 * n, f), fringeTo: new Uint32Array(cbuf, 4 * n + 4 * f, f),
+    src: new Uint16Array(cbuf, 4 * n + 8 * f, n), mask: new Uint16Array(cbuf, 6 * n + 8 * f, n), alpha: new Uint8Array(cbuf, 8 * n + 8 * f, n),
+    coastAt: new Int32Array(N).fill(-1), basinAt: new Map() };
+  R.pix.forEach((p, k) => { R.coastAt[p] = k; });
+  R.fringe.forEach((p, k) => { R.coastAt[p] = R.fringeTo[k]; });
+  R.basin.pix.forEach((p, k) => R.basinAt.set(p, k));
+  F = new Float32Array(N);
+  // The open-ocean cells on their own regular grid, for bilinear interpolation, with two spare rows
+  // beyond the last cells north and south for the gap filling to reach into.
+  const { lat, lon, enclosed } = meta.cells, step = meta.res;
+  const ids = lat.map((_, i) => i).filter(i => !enclosed[i]);
+  const lat0 = d3.min(ids, i => lat[i]) - 2 * step, lon0 = d3.min(ids, i => lon[i]);
+  ocean = { lat0, lon0, step, ni: Math.round((d3.max(ids, i => lat[i]) - lat0) / step) + 3, nj: Math.round(360 / step) };
+  const { ni, nj } = ocean;
+  let nodes = new Array(ni * nj).fill(null);
+  for (const i of ids) nodes[Math.round((lat[i] - lat0) / step) * nj + Math.round((lon[i] - lon0) / step) % nj] = [[i, 1]];
+  // Nodes over land take the mean of their neighbours (two passes), so interpolation reaches the coast.
+  // Each node is kept as weights over real cells, so a click reads exactly what the map draws.
+  for (let pass = 0; pass < 2; pass++) {
+    const next = nodes.slice();
+    for (let i = 0; i < ni; i++) for (let j = 0; j < nj; j++) {
+      if (nodes[i * nj + j]) continue;
+      const around = [];
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+        const m = i + di >= 0 && i + di < ni ? nodes[(i + di) * nj + (j + dj + nj) % nj] : null;
+        if (m) around.push(m);
+      }
+      if (!around.length) continue;
+      const acc = new Map();
+      for (const m of around) for (const [c, w] of m) acc.set(c, (acc.get(c) || 0) + w / around.length);
+      next[i * nj + j] = [...acc];
+    }
+    nodes = next;
+  }
+  ocean.nodes = nodes;
+}
+function bilinear(g, ni, nj, gi, gj) {  // weights renormalised over the corners that have data
+  const i0 = Math.floor(gi), j0 = Math.floor(gj), fi = gi - i0, fj = gj - j0;
+  const ja = ((j0 % nj) + nj) % nj, jb = (ja + 1) % nj;
+  let s = 0, t = 0, v;
+  if (i0 >= 0 && i0 < ni) {
+    v = g[i0 * nj + ja]; if (v === v) { s += v * (1 - fi) * (1 - fj); t += (1 - fi) * (1 - fj); }
+    v = g[i0 * nj + jb]; if (v === v) { s += v * (1 - fi) * fj; t += (1 - fi) * fj; }
+  }
+  if (i0 + 1 >= 0 && i0 + 1 < ni) {
+    v = g[(i0 + 1) * nj + ja]; if (v === v) { s += v * fi * (1 - fj); t += fi * (1 - fj); }
+    v = g[(i0 + 1) * nj + jb]; if (v === v) { s += v * fi * fj; t += fi * fj; }
+  }
+  return t > 0 ? s / t : NaN;
+}
+function computeField() {
+  const { nlat, nlon, res, cat } = R, { ni, nj } = ocean;
+  // Open ocean: bilinear between grid nodes.
+  const g = Float32Array.from(ocean.nodes, m => m ? blend(m, c => cellPct[c]) : NaN);
+  F.fill(NaN);
+  for (let i = 0; i < nlat; i++) {
+    const gi = (-90 + (i + 0.5) * res - ocean.lat0) / ocean.step;
+    for (let j = 0; j < nlon; j++) {
+      const p = i * nlon + j;
+      if (cat[p] === 0) F[p] = bilinear(g, ni, nj, gi, (-180 + (j + 0.5) * res - ocean.lon0) / ocean.step);
+    }
+  }
+  // Enclosed seas: inverse-distance blend of the nearest points.
+  const { pix, nb, w } = R.basin;
+  for (let k = 0; k < pix.length; k++) {
+    let s = 0, t = 0;
+    for (let q = 4 * k; q < 4 * k + 4; q++) { const v = cellPct[nb[q]]; if (v === v && w[q] > 0) { s += v * w[q]; t += w[q]; } }
+    F[pix[k]] = t ? s / t : NaN;
+  }
+  // Coastal band: good mornings per source cell and compass sector, then each pixel sums its open sectors.
+  const S = R.sources.length, good = new Float64Array(S * 16), days = new Float64Array(S);
+  for (let s = 0; s < S; s++) for (const m of period.months) {
+    const i = s * 12 + m - 1;
+    days[s] += coastBins.days[i];
+    for (let k = coastBins.start[i]; k < coastBins.start[i + 1]; k++) {
+      const code = coastBins.codes[k];
+      if (lut.g[code >> 4]) good[s * 16 + (code & 15)] += coastBins.counts[k];
+    }
+  }
+  for (let c = 0; c < R.pix.length; c++) {  // fading into the open-water value toward the band's outer edge
+    const s = R.src[c], open = R.mask[c], p = R.pix[c], a = R.alpha[c] / 255, under = F[p];
+    let n = 0;
+    for (let k = 0; k < 16; k++) if (open >> k & 1) n += good[s * 16 + k];
+    const v = days[s] ? (100 * n) / days[s] : NaN;
+    F[p] = v !== v ? under : under !== under ? v : a * v + (1 - a) * under;
+  }
+  for (let k = 0; k < R.fringe.length; k++) F[R.fringe[k]] = F[R.pix[R.fringeTo[k]]];
+  fieldVersion++;
 }
 
 // ---------- map ----------
 const canvas = document.getElementById("map");
 const ctx = canvas.getContext("2d");
-let W = 0, H = 0, projection, path, cellPaths = [], pointXY = [];
+const field = document.createElement("canvas"), fctx = field.getContext("2d");
+let W = 0, H = 0, projection, path, pointXY = [], polarXY = [], fieldImg = null, fieldKey = "", PAL, NODATA, moving = false, settle;
+// Mercator, inverted by hand: d3's invert wraps longitudes, and the field is drawn per screen pixel.
+const lonAt = x => (x - projection.translate()[0]) / projection.scale() * 180 / Math.PI;
+const latAt = y => (2 * Math.atan(Math.exp((projection.translate()[1] - y) / projection.scale())) - Math.PI / 2) * 180 / Math.PI;
+function palette() {  // 0.1% steps -> packed RGBA, for writing the field straight into image data
+  const rgba = hex => { const n = parseInt(hex.slice(1), 16); return ((255 << 24) | ((n & 255) << 16) | (((n >> 8) & 255) << 8) | (n >> 16)) >>> 0; };
+  PAL = new Uint32Array(1001);
+  for (let v = 0; v <= 1000; v++) PAL[v] = rgba(colorFor(v / 10));
+  NODATA = rgba(css("--nodata"));
+  fieldKey = "";
+}
 function layout() {
   const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
   W = r.width; H = r.height;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-  projection = d3.geoNaturalEarth1().fitExtent([[6, 6], [W - 6, H - 6]], { type: "Sphere" });
+  projection = d3.geoMercator().fitExtent([[6, 6], [W - 6, H - 6]], { type: "MultiPoint", coordinates: [[-180, -60], [180, 72]] });
   path = d3.geoPath(projection, ctx);
+  zoom.extent([[0, 0], [W, H]]).translateExtent([[0, 0], [W, H]]);
   if (!meta) return;
-  const { lat, lon, size } = meta.cells;
-  cellPaths = lat.map((la, i) => {
-    const s = size[i] / 2, x0 = Math.max(-180, lon[i] - s), x1 = Math.min(180, lon[i] + s);
-    const ring = [[x0, la - s], [x1, la - s], [x1, la + s], [x0, la + s]].map(p => projection(p));
-    return ring.every(Boolean) ? ring : null;
-  });
   pointXY = meta.points.map(p => projection([p.lon, p.lat]));
+  polarXY = land.polar.map(ring => ring.map(p => projection(p)));
+  fieldKey = "";
   draw();
+}
+function splitLand(l) {
+  // Antarctica wraps the pole, which Mercator sends to infinity (d3 then fills the oceans instead),
+  // so its outline is drawn flat, cut off at 85°S.
+  const polys = l.geometry.type === "MultiPolygon" ? l.geometry.coordinates : [l.geometry.coordinates];
+  const polar = p => p[0].some(q => q[1] < -89);
+  return { rest: { type: "MultiPolygon", coordinates: polys.filter(p => !polar(p)) },
+    polar: polys.filter(polar).map(p => p[0].map(([x, y]) => [x, Math.max(y, -85)])) };
+}
+function renderField(scale) {  // bilinear samples of the raster at every output pixel, coloured by band
+  const w = Math.max(1, Math.round(W * scale)), h = Math.max(1, Math.round(H * scale));
+  if (!fieldImg || field.width !== w || field.height !== h) { field.width = w; field.height = h; fieldImg = fctx.createImageData(w, h); }
+  const out = new Uint32Array(fieldImg.data.buffer), { nlat, nlon, res, cat } = R, k = transform.k;
+  const cj = new Int32Array(w), cf = new Float32Array(w), ri = new Int32Array(h), rf = new Float32Array(h);
+  for (let c = 0; c < w; c++) {
+    const lon = lonAt(((c + 0.5) / scale - transform.x) / k), fj = (lon + 180) / res - 0.5, j0 = Math.floor(fj);
+    cj[c] = lon < -180 || lon > 180 ? -1 : ((j0 % nlon) + nlon) % nlon; cf[c] = fj - j0;
+  }
+  for (let r = 0; r < h; r++) {
+    const fi = (latAt(((r + 0.5) / scale - transform.y) / k) + 90) / res - 0.5, i0 = Math.floor(fi);
+    ri[r] = i0 < 0 || i0 >= nlat - 1 ? -1 : i0; rf[r] = fi - i0;
+  }
+  for (let r = 0, o = 0; r < h; r++) {
+    const i0 = ri[r];
+    if (i0 < 0) { out.fill(0, o, o + w); o += w; continue; }
+    const fi = rf[r], a = i0 * nlon, b = a + nlon;
+    for (let c = 0; c < w; c++, o++) {
+      const j0 = cj[c];
+      if (j0 < 0) { out[o] = 0; continue; }
+      const j1 = j0 + 1 === nlon ? 0 : j0 + 1, fj = cf[c];
+      let s = 0, t = 0, v, q;
+      v = F[a + j0]; if (v === v) { q = (1 - fi) * (1 - fj); s += v * q; t += q; }
+      v = F[a + j1]; if (v === v) { q = (1 - fi) * fj; s += v * q; t += q; }
+      v = F[b + j0]; if (v === v) { q = fi * (1 - fj); s += v * q; t += q; }
+      v = F[b + j1]; if (v === v) { q = fi * fj; s += v * q; t += q; }
+      if (t >= 0.5) out[o] = PAL[Math.round((s / t) * 10)];
+      else out[o] = cat[(fi < 0.5 ? a : b) + (fj < 0.5 ? j0 : j1)] === 2 ? NODATA : 0;  // land stays clear
+    }
+  }
+  fctx.putImageData(fieldImg, 0, 0);
 }
 function draw() {
   if (!projection) return;
   const dpr = window.devicePixelRatio || 1, k = transform.k;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  ctx.translate(transform.x, transform.y); ctx.scale(k, k);
-  ctx.beginPath(); path({ type: "Sphere" }); ctx.fillStyle = css("--water"); ctx.fill();
-  if (cellPct) {
-    for (let i = 0; i < cellPaths.length; i++) {
-      const ring = cellPaths[i], col = colorFor(cellPct[i]);
-      if (!ring || !col) continue;
-      ctx.beginPath(); ctx.moveTo(ring[0][0], ring[0][1]);
-      for (let j = 1; j < 4; j++) ctx.lineTo(ring[j][0], ring[j][1]);
-      ctx.closePath(); ctx.fillStyle = col; ctx.fill();
-      ctx.strokeStyle = col; ctx.lineWidth = 1.1 / k; ctx.stroke();  // hides hairline seams between cells
-    }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = css("--water"); ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (fieldVersion) {
+    const scale = moving ? 1 : dpr, key = [transform.x, transform.y, k, W, H, scale, fieldVersion, NODATA].join();
+    if (key !== fieldKey) { renderField(scale); fieldKey = key; }
+    ctx.drawImage(field, 0, 0, canvas.width, canvas.height);
   }
+  ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * transform.x, dpr * transform.y);
   if (land) {
-    ctx.beginPath(); path(land); ctx.fillStyle = css("--land"); ctx.fill();
-    ctx.strokeStyle = css("--coast"); ctx.lineWidth = 0.5 / k; ctx.stroke();
+    ctx.beginPath(); path(land.rest);
+    for (const ring of polarXY) { ctx.moveTo(ring[0][0], ring[0][1]); for (const [x, y] of ring) ctx.lineTo(x, y); ctx.closePath(); }
+    ctx.fillStyle = css("--land"); ctx.fill();
+    ctx.strokeStyle = css("--coast"); ctx.lineWidth = 0.6 / k; ctx.stroke();
   }
-  ctx.beginPath(); path({ type: "Sphere" }); ctx.strokeStyle = css("--rule"); ctx.lineWidth = 1 / k; ctx.stroke();
   if (pointPct) {
     const ink = css("--ink"), r = Math.max(2.6, Math.min(6, 2.2 + k * 0.5)) / k;
     meta.points.forEach((p, i) => {
@@ -315,17 +480,24 @@ function draw() {
     });
     if (k >= 4) {  // names once zoomed in enough to have room
       ctx.font = `500 ${11 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = ink;
-      ctx.strokeStyle = css("--water"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
+      ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
       meta.points.forEach((p, i) => { const xy = pointXY[i]; if (!xy) return;
         ctx.strokeText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); ctx.fillText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); });
     }
   }
   if (selected) {
-    const xy = selected.type === "point" ? pointXY[selected.i] : projection([meta.cells.lon[selected.i], meta.cells.lat[selected.i]]);
-    if (xy) { ctx.beginPath(); ctx.arc(xy[0], xy[1], 10 / k, 0, 2 * Math.PI); ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2.5 / k; ctx.stroke(); }
+    const xy = selected.type === "point" ? pointXY[selected.i] : projection([selected.lon, selected.lat]);
+    if (xy) {
+      ctx.beginPath(); ctx.arc(xy[0], xy[1], 10 / k, 0, 2 * Math.PI);
+      ctx.strokeStyle = css("--panel"); ctx.lineWidth = 5 / k; ctx.stroke();
+      ctx.strokeStyle = css("--accent"); ctx.lineWidth = 2.5 / k; ctx.stroke();
+    }
   }
 }
-const zoom = d3.zoom().scaleExtent([1, 60]).on("zoom", e => { transform = e.transform; draw(); });
+const zoom = d3.zoom().scaleExtent([1, 80]).on("zoom", e => {
+  transform = e.transform; moving = true; draw();
+  clearTimeout(settle); settle = setTimeout(() => { moving = false; draw(); }, 160);  // full resolution once still
+});
 d3.select(canvas).call(zoom).on("dblclick.zoom", null);
 document.getElementById("zin").onclick = () => d3.select(canvas).transition().duration(250).call(zoom.scaleBy, 2);
 document.getElementById("zout").onclick = () => d3.select(canvas).transition().duration(250).call(zoom.scaleBy, 0.5);
@@ -336,44 +508,108 @@ function zoomTo(lon, lat, k = 8) {
   d3.select(canvas).transition().duration(600).call(zoom.transform, t);
 }
 canvas.addEventListener("click", ev => {
-  if (!meta) return;
+  if (!meta || !R) return;
   const r = canvas.getBoundingClientRect();
   const [x, y] = transform.invert([ev.clientX - r.left, ev.clientY - r.top]);
   let best = -1, bestD = (12 / transform.k) ** 2;
   pointXY.forEach((xy, i) => { if (!xy) return; const d = (xy[0] - x) ** 2 + (xy[1] - y) ** 2; if (d < bestD) { bestD = d; best = i; } });
   if (best >= 0) { select({ type: "point", i: best }); return; }
-  const ll = projection.invert([x, y]); if (!ll) return;
-  const { lat, lon, size } = meta.cells; let c = -1, cd = Infinity;
-  for (let i = 0; i < lat.length; i++) {
-    const dl = Math.abs(lat[i] - ll[1]), dn = Math.abs(((lon[i] - ll[0] + 540) % 360) - 180);
-    if (dl <= size[i] * 0.75 && dn <= size[i] * 0.75) { const d = dl * dl + dn * dn; if (d < cd) { cd = d; c = i; } }
-  }
-  select(c >= 0 ? { type: "cell", i: c } : null);
+  const lon = lonAt(x), lat = latAt(y);
+  select(Math.abs(lon) <= 180 && Math.abs(lat) < 85 ? locate(lon, lat) : null);
 });
 
+// ---------- what a click lands on ----------
+function locate(lon, lat) {
+  const { res, nlat, nlon, cat, coastAt } = R;
+  const i = Math.min(nlat - 1, Math.max(0, Math.floor((lat + 90) / res))), j = ((Math.floor((lon + 180) / res) % nlon) + nlon) % nlon;
+  const p = i * nlon + j;
+  if (coastAt[p] >= 0 && cat[p] !== 3) return { type: "coast", c: coastAt[p], under: seaWeights(p, lon, lat), lon, lat };
+  if (cat[p] === 3) {  // on land: snap to the nearest coast within about 300 km
+    let best = coastAt[p], bd = Infinity;
+    const cl = Math.cos(lat * Math.PI / 180);
+    if (best < 0) for (let di = -12; di <= 12; di++) for (let dj = -12; dj <= 12; dj++) {
+      if (i + di < 0 || i + di >= nlat) continue;
+      const c = coastAt[(i + di) * nlon + (((j + dj) % nlon) + nlon) % nlon];
+      const d = di * di + (dj * cl) ** 2;
+      if (c >= 0 && d < bd) { bd = d; best = c; }
+    }
+    if (best < 0) return { type: "land", lon, lat };
+    const q = R.pix[best], qlat = -90 + (Math.floor(q / nlon) + 0.5) * res, qlon = -180 + ((q % nlon) + 0.5) * res;
+    return { type: "coast", c: best, under: seaWeights(q, qlon, qlat), lat: qlat, lon: qlon, snapped: true };
+  }
+  if (cat[p] === 1 && R.basinAt.has(p)) return { type: "sea", enclosed: true, weights: seaWeights(p, lon, lat), lon, lat };
+  if (cat[p] === 0) return { type: "sea", enclosed: false, weights: oceanWeights(lon, lat), lon, lat };
+  return { type: "none", lon, lat };
+}
+function seaWeights(p, lon, lat) {  // the open-water field at a pixel: enclosed-sea blend or ocean interpolation
+  if (!R.basinAt.has(p)) return oceanWeights(lon, lat);
+  const k = R.basinAt.get(p), weights = [];
+  for (let q = 4 * k; q < 4 * k + 4; q++) if (R.basin.w[q] > 0) weights.push([R.basin.nb[q], R.basin.w[q]]);
+  return weights;
+}
+function oceanWeights(lon, lat) {  // the model cells behind the bilinear interpolation the map draws
+  const { lat0, lon0, step, ni, nj } = ocean;
+  const gi = (lat - lat0) / step, gj = (lon - lon0) / step, i0 = Math.floor(gi), j0 = Math.floor(gj), acc = new Map();
+  for (const [di, wi] of [[0, 1 - (gi - i0)], [1, gi - i0]]) for (const [dj, wj] of [[0, 1 - (gj - j0)], [1, gj - j0]]) {
+    if (i0 + di < 0 || i0 + di >= ni || wi * wj <= 0) continue;
+    const m = ocean.nodes[(i0 + di) * nj + (((j0 + dj) % nj) + nj) % nj];
+    if (m) for (const [c, w] of m) acc.set(c, (acc.get(c) || 0) + w * wi * wj);
+  }
+  if (acc.size) return [...acc];
+  let best = -1, bd = Infinity;  // next to land all four can be missing: use the nearest cell
+  meta.cells.lat.forEach((la, c) => { if (meta.cells.enclosed[c]) return; const d = km({ lat, lon }, { lat: la, lon: meta.cells.lon[c] }); if (d < bd) { bd = d; best = c; } });
+  return best >= 0 ? [[best, 1]] : [];
+}
+function blend(weights, f) {
+  let s = 0, t = 0;
+  for (const [c, w] of weights) { const v = f(c); if (isFinite(v)) { s += v * w; t += w; } }
+  return t ? s / t : NaN;
+}
+function arcs(mask) {  // open compass sectors as runs, e.g. "SSE–NW"
+  if (mask === 0xffff) return "every direction";
+  if (!mask) return "no direction (sheltered on every side)";
+  const on = k => (mask >> (((k % 16) + 16) % 16)) & 1;
+  let start = 0; while (on(start)) start++;
+  const runs = [];
+  for (let n = 1; n <= 16; n++) {
+    const s = (start + n) % 16;
+    if (!on(s)) continue;
+    if (!on(s - 1)) runs.push([s, s]); else runs[runs.length - 1][1] = s;
+  }
+  return runs.map(([a, b]) => a === b ? P16[a] : `${P16[a]}–${P16[b]}`).join(", ");
+}
+function rose(mask) {  // open sectors in the accent colour, closed ones grey
+  const c = 34, r = 26, at = (deg, rad) => [c + rad * Math.sin(deg * Math.PI / 180), c - rad * Math.cos(deg * Math.PI / 180)];
+  const wedges = P16.map((_, k) => {
+    const [x0, y0] = at(k * 22.5 - 11.25, r), [x1, y1] = at(k * 22.5 + 11.25, r);
+    return `<path d="M${c},${c}L${x0.toFixed(1)},${y0.toFixed(1)}A${r},${r} 0 0 1 ${x1.toFixed(1)},${y1.toFixed(1)}Z" fill="${(mask >> k) & 1 ? "var(--accent)" : "var(--rule)"}" stroke="var(--panel)" stroke-width="1"></path>`;
+  }).join("");
+  return `<svg class="rose" viewBox="0 0 68 68" width="68" height="68" role="img" aria-label="Open to swell from ${arcs(mask)}">${wedges}<circle cx="${c}" cy="${c}" r="5" fill="var(--panel)"></circle>` +
+    ["N", "E", "S", "W"].map((t, q) => { const [x, y] = at(q * 90, r + 6); return `<text x="${x.toFixed(1)}" y="${(y + 3).toFixed(1)}" text-anchor="middle">${t}</text>`; }).join("") + `</svg>`;
+}
+
 // ---------- panels ----------
-function monthlyShares(store, lutArr, e) { return MONTHS.map((_, m) => share(store, lutArr, e, [m + 1])); }
-function typical(store, lutArr, e, months, isPoint) {
-  const hs = [], ts = [];
+function typical(store, e, months, pass, baseOf, sectorOf) {  // median height and period on the good mornings
+  const hs = [], ts = [], from = new Float64Array(16), T = meta.bins.period_s;
   for (const m of months) { const i = e * 12 + m - 1;
     for (let k = store.start[i]; k < store.start[i + 1]; k++) {
-      const code = store.codes[k]; if (!lutArr[code]) continue;
-      const base = isPoint ? Math.floor(code / 6) : code, h = Math.floor(base / (meta.bins.period_s * 6)), t = Math.floor(base / 6) % meta.bins.period_s;
+      const code = store.codes[k]; if (!pass(code)) continue;
+      const base = baseOf(code), h = Math.floor(base / (T * 6)), t = Math.floor(base / 6) % T;
       for (let n = 0; n < store.counts[k]; n++) { hs.push(h + 0.5); ts.push(t + 5.5); }
+      if (sectorOf) from[sectorOf(code)] += store.counts[k];
     } }
   if (!hs.length) return "–";
-  return `${Math.round(d3.median(hs))} ft @ ${Math.round(d3.median(ts))} s`;
+  return `${Math.round(d3.median(hs))} ft @ ${Math.round(d3.median(ts))} s${sectorOf ? " from " + P16[d3.maxIndex(from)] : ""}`;
 }
 function bestMonths(shares) {
   let best = -1, at = 0;
   for (let s = 0; s < 12; s++) { const v = (shares[s] + shares[(s + 1) % 12] + shares[(s + 2) % 12]) / 3; if (v > best) { best = v; at = s; } }
-  return `${MONTHS[at]}–${MONTHS[(at + 2) % 12]} ${Math.round(best)}%`;
+  return best < 0 ? "–" : `${MONTHS[at]}–${MONTHS[(at + 2) % 12]} ${Math.round(best)}%`;
 }
 function windText(p) {
   const w = period.months.map(m => p.wind?.[m - 1]).filter(Boolean);
   if (!w.length) return "–";
-  const pts16 = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
-  const dirs = d3.rollups(w, v => v.length, d => pts16[Math.round(d[1] / 22.5) % 16]).sort((a, b) => b[1] - a[1]);
+  const dirs = d3.rollups(w, v => v.length, d => P16[Math.round(d[1] / 22.5) % 16]).sort((a, b) => b[1] - a[1]);
   return `${Math.round(d3.median(w, d => d[0]))} kt ${dirs[0][0]}`;
 }
 function bars(shares) {
@@ -384,26 +620,56 @@ function bars(shares) {
       `<text class="v" x="${m * bw + bw / 2}" y="${y(v) - 3}" text-anchor="middle">${isFinite(v) ? Math.round(v) : ""}</text>` +
       `<text x="${m * bw + bw / 2}" y="${h - 3}" text-anchor="middle">${MONTHS[m][0]}</text>`).join("") + `</svg>`;
 }
+function nearestPoint(lat, lon, within) {
+  let best = null, bd = within;
+  meta.points.forEach(p => { const d = km({ lat, lon }, p); if (d < bd) { bd = d; best = p; } });
+  return best && { p: best, km: bd };
+}
 function select(sel) { selected = sel; draw(); renderDetail(); }
+const EMPTY = `<h2>Selected</h2><p class="detail-empty">Click a break, any stretch of coast or any patch of ocean to see its month-by-month chart.</p>`;
 function renderDetail() {
   const el = document.getElementById("detail");
-  if (!selected || !pointPct) { el.innerHTML = `<h2>Selected</h2><p class="detail-empty">Click a break, a stretch of coast or any patch of ocean to see its month-by-month chart.</p>`; return; }
-  let title, sub, badge, pct, shares, typ, facts = "";
+  if (!selected || !pointPct) { el.innerHTML = EMPTY; return; }
+  if (selected.type === "land" || selected.type === "none") {
+    el.innerHTML = `<h2>Selected</h2><h3>${latlon(selected.lat, selected.lon, 2)}</h3><p class="detail-empty">${selected.type === "land"
+      ? "Inland, more than about 300 km from the sea or a large lake. Click nearer the coast."
+      : "No model data here: sea ice for much of the year, or water too small for the wave models."}</p>`;
+    return;
+  }
+  let title, sub, badge, pct, shares, typ, facts = "", side = "";
   if (selected.type === "point") {
     const p = meta.points[selected.i], i = selected.i;
     title = p.name; sub = `${p.region}${p.group && p.kind === "coast" ? " · " + p.group : ""}`;
     badge = { break: "Named break", stretch: `Under-the-radar ◆${p.num}`, coast: "Regional coast" }[p.kind];
-    pct = pointPct[i]; shares = monthlyShares(pts, lut.p, i); typ = typical(pts, lut.p, i, period.months, true);
+    pct = pointPct[i]; shares = MONTHS.map((_, m) => share(pts, lut.p, i, [m + 1]));
+    typ = typical(pts, i, period.months, code => lut.p[code], code => Math.floor(code / 6));
     facts = `<dt>Faces</dt><dd>${p.facing}°</dd><dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${windText(p)}</dd><dt>Measured on</dt><dd>${p.measure === "waves" ? "total waves" : "swell"}</dd>`;
+  } else if (selected.type === "coast") {
+    const c = selected.c, s = R.src[c], cell = R.sources[s], open = R.mask[c];
+    const pass = code => ((open >> (code & 15)) & 1) && lut.g[code >> 4];
+    const la = meta.cells.lat[cell], lo = meta.cells.lon[cell], near = nearestPoint(selected.lat, selected.lon, 60);
+    title = near ? `Coast near ${near.p.name}` : latlon(selected.lat, selected.lon, 2);
+    sub = `${near ? latlon(selected.lat, selected.lon, 2) + " · " : ""}${selected.snapped ? "nearest coast to where you clicked" : "this stretch of shore"}`;
+    badge = "Coastline";
+    const a = R.alpha[c] / 255, mix = (v, w) => !isFinite(w) ? v : !isFinite(v) ? w : a * v + (1 - a) * w;  // as on the map
+    pct = mix(shareIf(coastBins, s, period.months, pass), blend(selected.under, x => cellPct[x]));
+    shares = MONTHS.map((_, m) => mix(shareIf(coastBins, s, [m + 1], pass), blend(selected.under, x => share(grid, lut.g, x, [m + 1]))));
+    typ = typical(coastBins, s, period.months, pass, code => code >> 4, code => code & 15);
+    side = rose(open);
+    facts = `<dt>Swell reaches it from</dt><dd>${arcs(open)}</dd>` +
+      `<dt>Waves read at</dt><dd>${meta.cells.enclosed[cell] ? "model point" : meta.res + "° model cell"} ${latlon(la, lo)}, ${Math.round(km({ lat: selected.lat, lon: selected.lon }, { lat: la, lon: lo }))} km away</dd>` +
+      `<dt>Measured on</dt><dd>${meta.cells.enclosed[cell] ? "total waves" : "swell"}</dd>`;
   } else {
-    const i = selected.i, la = meta.cells.lat[i], lo = meta.cells.lon[i];
-    title = `${Math.abs(la).toFixed(1)}°${la >= 0 ? "N" : "S"} ${Math.abs(lo).toFixed(1)}°${lo >= 0 ? "E" : "W"}`;
-    badge = meta.cells.enclosed[i] ? "Enclosed-sea point" : "Open-ocean cell"; sub = `${meta.cells.size[i]}° model cell, no shore direction`;
-    pct = cellPct[i]; shares = monthlyShares(grid, lut.g, i); typ = typical(grid, lut.g, i, period.months, false);
-    facts = `<dt>Measured on</dt><dd>${meta.cells.enclosed[i] ? "total waves" : "swell"}</dd>`;
+    const wts = selected.weights, main = wts.length ? wts.reduce((a, b) => (b[1] > a[1] ? b : a))[0] : -1;
+    title = latlon(selected.lat, selected.lon, 2);
+    badge = selected.enclosed ? "Enclosed sea" : "Open ocean";
+    sub = selected.enclosed ? `Blended from the ${wts.length} nearest model points` : `Interpolated from ${wts.length === 1 ? "the nearest" : wts.length + " nearby"} ${meta.res}° model cell${wts.length === 1 ? "" : "s"}`;
+    pct = blend(wts, c => cellPct[c]); shares = MONTHS.map((_, m) => blend(wts, c => share(grid, lut.g, c, [m + 1])));
+    typ = main >= 0 ? typical(grid, main, period.months, code => lut.g[code], code => code) : "–";
+    facts = `<dt>Swell direction</dt><dd>any: open water</dd><dt>Measured on</dt><dd>${selected.enclosed ? "total waves" : "swell"}</dd>`;
   }
   el.innerHTML = `<h2>Selected</h2><div><span class="badge">${badge}</span></div><h3>${title}</h3><div class="note" style="margin-top:-6px">${sub}</div>
-    <div style="display:flex;align-items:baseline;gap:10px"><span class="bigpct">${isFinite(pct) ? Math.round(pct) + "%" : "–"}</span><span class="note">of mornings good · ${period.label}</span></div>
+    <div style="display:flex;align-items:center;gap:10px;justify-content:space-between"><div style="display:flex;align-items:baseline;gap:10px"><span class="bigpct">${isFinite(pct) ? Math.round(pct) + "%" : "–"}</span><span class="note">of mornings good · ${period.label}</span></div>${side}</div>
     ${bars(shares)}
     <dl class="facts"><dt>Best 3 months</dt><dd>${bestMonths(shares)}</dd><dt>Typical good morning</dt><dd>${typ}</dd>${facts}</dl>`;
 }
@@ -477,19 +743,22 @@ async function localTools() {
 (async function start() {
   syncControls();
   try {
-    meta = await (await fetch("data/meta.json")).json();
-    document.getElementById("loading").textContent = "Loading the model data (about 13 MB)…";
-    const [g, p, l] = await Promise.all([bytes("data/grid.b64.txt"), bytes("data/points.b64.txt"), fetch("data/land.json").then(r => r.json())]);
-    grid = unpack(g, meta.cells.lat.length); pts = unpack(p, meta.points.length); land = l;
-    document.getElementById("about").textContent += ` · data as of ${meta.generated}, ${meta.res}° grid`;
+    meta = await json("data/meta.json");
+    document.getElementById("loading").textContent = "Loading the model data (about 18 MB)…";
+    const [g, p, c, l, r] = await Promise.all([bytes("data/grid.b64.txt"), bytes("data/points.b64.txt"), bytes("data/coast.b64.txt"),
+      json("data/land.json"), json("data/raster.json")]);
+    grid = unpack(g, meta.cells.lat.length); pts = unpack(p, meta.points.length); coastBins = unpack(c, r.coast.sources.length); land = splitLand(l);
+    setupRaster(r, new Uint8Array(await inflate(r.cat)), await inflate(r.coast.data));
+    document.getElementById("about").textContent += ` · data as of ${meta.generated}; ${meta.res}° ocean grid, coast at ${r.res}°`;
     document.getElementById("loading").hidden = true;
-    layout(); recompute();
+    palette(); layout(); recompute();
   } catch (err) {
     document.getElementById("loading").textContent = `Couldn't load the data: ${err.message}. Reload the page to try again.`;
   }
   window.addEventListener("resize", () => { layout(); });
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", draw);
-  new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  const retheme = () => { if (PAL) palette(); draw(); };
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", retheme);
+  new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   localTools();
 })();
 </script>
