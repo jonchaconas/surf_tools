@@ -161,7 +161,8 @@ def morning(row, keep):
 
 
 def load(month):
-    """Morning samples per basin: {name: dict(lat, lon, hs, tp, dir, ws)}, arrays shaped (point, day).
+    """Morning samples per basin: {name: dict(lat, lon, hs, tp, dir, ws, wave_hs, wave_tm, wave_dir)},
+    arrays shaped (point, day); the wave_* fields are the total sea, for the relaxed enclosed-sea standard.
 
     Open-Meteo has no swell peak period over the Great Lakes, so there it is estimated
     from the mean swell period using the median peak/mean ratio of the other basins;
@@ -197,5 +198,6 @@ def load(month):
         out[name] = dict(lat=b["lat"], lon=b["lon"], hs=b["swell_wave_height"],
                          tp=np.where(missing, mean * ratio, peak),
                          dir=b["swell_wave_direction"], ws=b["wind_wave_height"],
-                         tp_ratio=ratio if missing.any() else None)
+                         wave_hs=b["wave_height"], wave_tm=b["wave_period"], wave_dir=b["wave_direction"],
+                         ratio=ratio, tp_ratio=ratio if missing.any() else None)
     return out

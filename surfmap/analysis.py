@@ -17,7 +17,7 @@ from shapely import contains_xy
 from shapely.geometry import Point
 from shapely.ops import unary_union
 
-from . import config, inland, rating, wind, ww3
+from . import config, inland, rating, regions, wind, ww3
 from .spots import SPOTS
 from .stretches import STRETCHES
 
@@ -142,8 +142,8 @@ def month_counts(month):
         u=np.nansum(w * np.sin(heading), 0), v=np.nansum(w * np.cos(heading), 0), w=w.sum(0),
         spots=_spot_counts(globe, {r: g for r, (_, g) in details.items()}, basins),
         stretches=_stretch_counts(globe),
-        basins={k: dict(lat=b["lat"], lon=b["lon"], n=rating.has_sea(b["hs"], b["ws"]).sum(1),
-                        good=rating.is_good(b["hs"], b["tp"], b["ws"]).sum(1))
+        basins={k: dict(lat=b["lat"], lon=b["lon"], n=np.isfinite(b["wave_hs"]).sum(1),
+                        good=_relaxed(b["wave_hs"], b["wave_tm"], b["ratio"]).sum(1))
                 for k, b in basins.items()},
         detail={r: g.counts(dds) for r, (dds, g) in details.items()},
         tp_ratio=next((b["tp_ratio"] for b in basins.values() if b["tp_ratio"]), None),
@@ -152,31 +152,28 @@ def month_counts(month):
 
 
 def _spot_counts(globe, details, basins):
-    """Good+ mornings with swell inside each break's exposure window, from its seaward cell.
+    """Good mornings with waves inside each break's exposure window, from its seaward cell.
 
-    Breaks in an enclosed sea use Open-Meteo, breaks inside a DETAIL box its 0.5 degree
-    grid, and the rest the global 1 degree grid.
+    Breaks in an enclosed sea use that basin's points and the relaxed lake standard; breaks
+    inside a DETAIL box use its 0.5 degree grid; the rest use the global 1 degree grid and good+.
     """
     out = {}
     for name, _, slat, slon, facing in SPOTS:
         basin = _basin_of(slat, slon)
         if basin:
-            if basin not in basins:  # this month's Open-Meteo data not downloaded yet
-                continue
-            b = basins[basin]
-            k = _seaward(b["lat"], b["lon"], slat, slon, facing)
-            if k is None:
-                continue
-            h, t, d, w = b["hs"][k], b["tp"][k], b["dir"][k], b["ws"][k]
-        else:
-            g = next((details[r] for r, (la0, la1, lo0, lo1) in ww3.DETAIL.items()
-                      if r in details and la0 <= slat <= la1 and lo0 <= slon % 360 <= lo1), globe)
-            k = _seaward(g.lat, g.lon, slat, slon, facing)
-            if k is None:
-                continue
-            i, j = g.cells[k]
-            h, t, d, w = g.hs[:, i, j], g.tp[:, i, j], g.frm[:, i, j], g.ws[:, i, j]
-        out[name] = _tally(h, t, d, w, facing)
+            if basin in basins:  # absent while this month's enclosed-sea data is still downloading
+                b = basins[basin]
+                k = _seaward(b["lat"], b["lon"], slat, slon, facing)
+                if k is not None:
+                    out[name] = _relaxed_tally(b, k, facing)
+            continue
+        g = next((details[r] for r, (la0, la1, lo0, lo1) in ww3.DETAIL.items()
+                  if r in details and la0 <= slat <= la1 and lo0 <= slon % 360 <= lo1), globe)
+        k = _seaward(g.lat, g.lon, slat, slon, facing)
+        if k is None:
+            continue
+        i, j = g.cells[k]
+        out[name] = _tally(g.hs[:, i, j], g.tp[:, i, j], g.frm[:, i, j], g.ws[:, i, j], facing)
     return out
 
 
@@ -190,6 +187,22 @@ def _stretch_counts(globe):
         i, j = globe.cells[k]
         out[name] = _tally(globe.hs[:, i, j], globe.tp[:, i, j], globe.frm[:, i, j], globe.ws[:, i, j], facing)
     return out
+
+
+def _relaxed(hs, tm, ratio):
+    """Enclosed seas rarely see groundswell, so their contours use the regional lake standard
+    (regions.LAKE: total waves 4-10 ft at a dominant period of at least 6 s) instead of good+."""
+    std = regions.LAKE
+    with np.errstate(invalid="ignore"):
+        return (hs >= std["min_hs"]) & (hs <= std["max_hs"]) & (tm * (ratio if std["peak"] else 1) >= std["min_period"])
+
+
+def _relaxed_tally(b, k, facing):
+    """_tally's counterpart for a break in an enclosed sea, by the relaxed standard."""
+    h, t, d = b["wave_hs"][k], b["wave_tm"][k] * b["ratio"], b["wave_dir"][k]
+    good = _relaxed(b["wave_hs"][k], b["wave_tm"][k], b["ratio"]) & rating.exposed(d, facing)
+    return dict(good=int(good.sum()), n=int(np.isfinite(h).sum()), hs=h[good],
+                hb=rating.breaker_height(h[good], t[good]), tp=t[good], dir=d[good])
 
 
 def _tally(h, t, d, w, facing):

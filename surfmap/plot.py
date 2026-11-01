@@ -29,6 +29,7 @@ CMAP, NORM = ListedColormap(COLORS), BoundaryNorm(LEVELS, len(COLORS))
 INK, INK_2, INK_3 = "#1a1a19", "#4a4a47", "#7a7a76"
 LAND, COAST, NODATA, HATCH = "#e4e3de", "#9a9994", "#d0cfca", "#a9a8a2"
 PC = ccrs.PlateCarree()
+MAP_CENTER = 10  # central longitude of the world maps
 HALO = [pe.withStroke(linewidth=2.2, foreground="white")]
 
 INSETS = [  # title, basins it shows, extent (lon0, lon1, lat0, lat1)
@@ -49,14 +50,23 @@ def _land():
     return cfeature.ShapelyFeature([land.difference(inland.geometries()["great_lakes"])], PC)
 
 
-def _draw(ax, field, nodata, land, rows=slice(None), cols=slice(None)):
+def _draw(ax, field, nodata, land, rows=slice(None), cols=slice(None), center=None):
+    """Contour the field onto ax. The grid is projected first and contoured in map coordinates:
+    reprojecting finished contours breaks on huge globe-spanning bands (January's 0-2% band came
+    out in the wrong colour). For a global map, pass its central longitude so the grid starts at
+    the map's edge and no contour straddles the seam."""
     lo, la = LON[cols], LAT[rows]
-    cs = ax.contourf(lo, la, field[rows][:, cols], levels=LEVELS, cmap=CMAP, norm=NORM,
-                     transform=PC, zorder=1)
+    f, nd = field[rows][:, cols], nodata[rows][:, cols].astype(float)
+    if center is not None:
+        k = int(np.searchsorted(lo, center - 180))
+        lo = np.concatenate([lo[k:], lo[:k] + 360])
+        f, nd = (np.concatenate([a[:, k:], a[:, :k]], axis=1) for a in (f, nd))
+    x, y = np.meshgrid(lo, la)
+    cs = ax.contourf(x, y, f, levels=LEVELS, cmap=CMAP, norm=NORM, transform=PC, transform_first=True, zorder=1)
     cs.set_rasterized(True)
-    nd = ax.contourf(lo, la, nodata[rows][:, cols].astype(float), levels=[0.5, 1.5],
-                     colors=[NODATA], hatches=["////"], transform=PC, zorder=1.5)
-    nd.set_rasterized(True)
+    hatch = ax.contourf(x, y, nd, levels=[0.5, 1.5], colors=[NODATA], hatches=["////"], transform=PC,
+                        transform_first=True, zorder=1.5)
+    hatch.set_rasterized(True)
     # Rasterized: as vectors the 1:50m outlines make each page ~4 MB instead of ~1 MB.
     ax.add_feature(land, facecolor=LAND, edgecolor="none", zorder=2, rasterized=True)
     ax.add_feature(cfeature.COASTLINE.with_scale("50m"), edgecolor=COAST, linewidth=0.3, zorder=3,
@@ -165,7 +175,8 @@ def _inset(fig, rect, title, basins, extent, field, nodata, land, spots, ready):
     for s in mine:
         ax.text(s["lon"], s["lat"] + 0.012 * (lat1 - lat0) * 3, f"{s['name']} {s['pct']:.0f}%",
                 fontsize=6.5, ha="center", va="bottom", transform=PC, zorder=6, path_effects=HALO)
-    ax.set_title(title, fontsize=9.5, weight="bold", loc="left", pad=4)
+    sep = "\n" if rect[2] < 0.15 else "  \u00b7  "  # narrow insets put the standard on its own line
+    ax.set_title(f"{title}{sep}good = 4 ft @ 6 s", fontsize=9.5, weight="bold", loc="left", pad=4)
     if any(b not in ready for b in basins):
         ax.text(0.5, 0.5, "Open-Meteo data is\nstill downloading", transform=ax.transAxes,
                 ha="center", va="center", fontsize=8.5, color=INK_2, zorder=7,
@@ -214,9 +225,9 @@ def page(pdf, m, land, breakout_page):
     fig.text(0.02, 0.925, f"Share of mornings with good-or-better surf in the wave-model record, "
              f"{m.describe()}", fontsize=11.5, color=INK_2, va="top")
 
-    ax = fig.add_axes([0.015, 0.375, 0.73, 0.54], projection=ccrs.Robinson(central_longitude=10))
+    ax = fig.add_axes([0.015, 0.375, 0.73, 0.54], projection=ccrs.Robinson(central_longitude=MAP_CENTER))
     ax.set_global()
-    _draw(ax, field, nodata, land)
+    _draw(ax, field, nodata, land, center=MAP_CENTER)
     arrows = _swell_arrows(ax, *m.swell_arrows())
     _label_spots(ax, [s for s in spots if s["basin"] is None])
     _stretch_markers(ax, stretches)
@@ -233,11 +244,11 @@ def page(pdf, m, land, breakout_page):
     fig.text(0.02, 0.045, rating.rule_text(), fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.028,
              "Ocean: NOAA WAVEWATCH III global model (Univ. of Hawaiʻi run, PacIOOS ERDDAP), 1° sampling. "
-             "Great Lakes, Mediterranean, Black Sea, Caspian: Météo-France MFWAM via Open-Meteo and Copernicus "
-             "Marine, 0.75° lakes / 1.5–2° seas. Both judged by the same open-ocean standard.",
+             "Enclosed seas (MFWAM via Open-Meteo and Copernicus Marine; 0.75° lakes, 1.5–2° seas) use a relaxed "
+             "standard: total waves 4–10 ft at a dominant period of at least 6 s.",
              fontsize=7.5, color=INK_2, va="top")
-    lakes = (f" Where swell peak period is missing (Great Lakes, Copernicus years) it is {m.tp_ratio:.2f}× "
-             f"the mean swell period." if m.tp_ratio else "")
+    lakes = (f" Missing peak periods (Great Lakes, Copernicus years) are taken as {m.tp_ratio:.2f}× the mean "
+             f"period." if m.tp_ratio else "")
     fig.text(0.02, 0.011,
              "Offshore sea state only: bathymetry, sheltering, tide and wind direction at each break are not modelled. "
              "Break percentages use the nearest seaward model cell within 250 km." + lakes,
