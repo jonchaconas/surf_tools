@@ -346,12 +346,12 @@ def stretch_page(pdf):
     from . import discover
 
     monthly = _monthly("stretches", "num")
-    rows = [dict(r, tag=f"\u25c6{r['num']}", months=monthly[r["num"]])
-            for r in Period(tuple(range(1, 13)), "", "").stretches()]
+    rows = sorted((dict(r, tag=f"\u25c6{r['num']}", months=monthly[r["num"]])
+                   for r in Period(tuple(range(1, 13)), "", "").stretches()), key=lambda r: -r["pct"])
     subtitle = (f"Coast where mornings are often good+ with swell aimed at the shore (\u2265{discover.MIN_YEAR}% "
                 f"year-round, or \u2265{discover.MIN_PEAK}% over its best three months),\nat least {discover.FAR_KM} "
                 f"km from the well-known breaks and within {discover.TOWN_KM} km of a town of "
-                f"{discover.TOWN_POP:,}+. Numbers match the \u25c6 markers on the maps.")
+                f"{discover.TOWN_POP:,}+. Listed by year-round consistency; numbers match the \u25c6 markers on the maps.")
     notes = ("Each stretch is read from one WW3 cell 50\u2013120 km offshore. The rule has no wind, which flatters "
              "cold, steady coasts (Chile, Peru, Namibia) and storm coasts (southern Chile, New Zealand's West "
              "Coast); check local wind and access before booking a trip.")
@@ -367,10 +367,11 @@ def spot_page(pdf):
     rows = [dict(r, months=monthly[r["name"]]) for r in Period(tuple(range(1, 13)), "", "").spots()
             if r["basin"] is None and r["name"] in monthly]
     rows = _distinct(sorted(rows, key=lambda r: -_peak(r["months"])[1]), POPULAR_ROWS)
+    rows.sort(key=lambda r: -r["pct"])  # listed by year-round consistency
     for i, r in enumerate(rows, 1):
         r["tag"] = str(i)
     subtitle = (f"The {len(rows)} well-known breaks with the strongest three-month season (best one per 100 miles "
-                f"of coast), ranked by that season.\nBreaks in the enclosed seas are on the map insets.")
+                f"of coast), listed by year-round consistency.\nBreaks in the enclosed seas are on the map insets.")
     notes = ("Each break is read from its nearest seaward model cell (0.5\u00b0 in East and Southeast Asia, 1\u00b0 "
              "elsewhere) with swell inside its exposure window. The rule has no wind; local reefs, points and "
              "sheltering are not modelled.")
@@ -516,7 +517,8 @@ def _region_footer(fig, rows):
     fig.text(0.02, 0.05, "Open-Meteo Marine (M\u00e9t\u00e9o-France MFWAM) at each coast's model cell, a few km "
              "offshore. Typical surfable morning = medians over surfable mornings: total wave height @ mean period "
              "and the direction waves come from." + pending, fontsize=7.5, color=INK_2, va="top")
-    fig.text(0.02, 0.033, WIND_NOTE + " Neither standard uses wind; check it before paddling out.",
+    fig.text(0.02, 0.033, "Coasts are ranked by year-round surfable %. " + WIND_NOTE +
+             " Neither standard uses wind; check it before paddling out.",
              fontsize=7.5, color=INK_3, va="top")
 
 
@@ -528,7 +530,7 @@ def region_page(pdf, region, land):
 
     spec = regions.REGIONS[region]
     tp_ratio = next((r for r in (month_counts(m).tp_ratio for m in range(1, 13)) if r), 1.29)
-    rows = regions.summary(region, tp_ratio)
+    rows = sorted(regions.summary(region, tp_ratio), key=lambda r: -r["pct"])  # ranked by year-round surfable %
 
     if len(rows) <= SPLIT_ROWS:
         fig = _new_page(f"{region}: when and where it's surfable", _region_subtitle())
