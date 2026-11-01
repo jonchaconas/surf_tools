@@ -15,7 +15,9 @@ chart() writes the map's swell chart: the whole ocean on a 1 degree grid every C
 wave height, peak period and direction from NOAA's WAVEWATCH III and 10 m wind from NCEP's GFS,
 both from NOAA CoastWatch's ERDDAP (no login). web/data/fcmap.json describes it (times, grid, the
 fields and their steps) and web/data/fcmap.b64.txt holds it: gzip, base64, Uint8 [time][field][lat][lon],
-255 where there's no value.
+255 where there's no value. WAVEWATCH III leaves out the Great Lakes and Hudson Bay, so the enclosed-sea
+points of the map (meta.json cells marked enclosed) get Open-Meteo's marine forecast as well, in
+fcmap.json "basin": {cells: their indexes, data: gzip base64 Uint8 [time][hs, tp, dir][cell]}.
 """
 
 import json
@@ -124,22 +126,25 @@ def _open_meteo(url, pts, hourly, extra=None):
 
 
 def _marine_fallback(pts):
-    """Open-Meteo's marine forecast for points without CDIP or Copernicus waves."""
-    from .points import corrected, correction, sea_tp
+    """Open-Meteo's marine forecast for points without CDIP or Copernicus waves. Its swell peak
+    periods are often missing, so both trains go from their mean periods through the same
+    conversion as the record (points.trains)."""
+    from .points import corrected, correction, sea_tp, trains
 
-    names = ["swell_wave_height", "swell_wave_peak_period", "swell_wave_direction", "secondary_swell_wave_height",
+    names = ["swell_wave_height", "swell_wave_period", "swell_wave_direction", "secondary_swell_wave_height",
              "secondary_swell_wave_period", "secondary_swell_wave_direction", "wave_height", "wave_period", "wave_direction"]
     out = {}
     for p, h in zip(pts, _open_meteo(MARINE, [(p["lat"], p["lon"]) for p in pts], names)):
         if not h:
             continue
         cols = [np.array([np.nan if v is None else v for v in h[n]], float) for n in names]
-        cols[7] = sea_tp(cols[7], p["measure"] == "waves")  # its mean period, scaled as MFWAM's
+        t, hs = trains(*cols[:6]), cols[6]
         qm = correction(p["lat"], p["lon"])
         if qm is not None:  # as points.mornings() corrects the record
             with np.errstate(invalid="ignore", divide="ignore"):
-                f = np.where(cols[6] > 0, corrected(cols[6], qm) / cols[6], 1.0)
-            cols[0], cols[3], cols[6] = cols[0] * f, cols[3] * f, cols[6] * f
+                f = np.where(hs > 0, corrected(hs, qm) / hs, 1.0)
+            t["hs1"], t["hs2"], hs = t["hs1"] * f, t["hs2"] * f, hs * f
+        cols = [t["hs1"], t["tp1"], t["dir1"], t["hs2"], t["tp2"], t["dir2"], hs, sea_tp(cols[7], p["measure"] == "waves"), cols[8]]
         out[key(p)] = _rows(np.array(h["time"], dtype="datetime64[m]"), p["lon"], cols, 1)
     return out
 
@@ -243,9 +248,44 @@ def chart():
                          for n, step in CHART_FIELDS], axis=1).astype(np.uint8)  # [time][field][lat][lon]
     lat, lon = waves.latitude.values, waves.longitude.values
     MAP_DATA.write_text(base64.b64encode(gzip.compress(cube.tobytes(), 9)).decode())
+    try:
+        basin = _chart_basins(waves.time.values)
+    except Exception as e:  # rate limits, outages: the chart still has the open ocean
+        print(f"  enclosed seas left out: {type(e).__name__}: {str(e)[:120]}", flush=True)
+        basin = None
     MAP_JSON.write_text(json.dumps(dict(
-        generated=now.isoformat() + "Z", sources={"waves": "NOAA WAVEWATCH III (NWW3_Global_Best)", "wind": "NCEP GFS (NCEP_Global_Best)"},
+        generated=now.isoformat() + "Z", sources={"waves": "NOAA WAVEWATCH III (NWW3_Global_Best)", "wind": "NCEP GFS (NCEP_Global_Best)",
+                                                  "enclosed seas": "Open-Meteo marine forecast"},
         times=[str(np.datetime64(t, "m")) + "Z" for t in waves.time.values], lat0=float(lat[0]), lon0=float(lon[0]),
-        step=float(lat[1] - lat[0]), nlat=len(lat), nlon=len(lon), fields=CHART_FIELDS), separators=(",", ":")))
+        step=float(lat[1] - lat[0]), nlat=len(lat), nlon=len(lon), fields=CHART_FIELDS, basin=basin), separators=(",", ":")))
     print(f"swell chart: {cube.shape[0]} times, {len(lat)} x {len(lon)} grid; wrote {MAP_DATA} "
           f"({MAP_DATA.stat().st_size / 1e6:.1f} MB)", flush=True)
+
+
+def _chart_basins(times):
+    """Open-Meteo's waves at the map's enclosed-sea points at the chart's times (see chart())."""
+    import base64
+    import gzip
+
+    from .points import corrected, correction, sea_tp
+
+    cells = json.loads(META.read_text())["cells"]
+    idx = [k for k, e in enumerate(cells["enclosed"]) if e]
+    at = [(cells["lat"][k], cells["lon"][k]) for k in idx]
+    want = np.asarray(times, dtype="datetime64[m]")
+    cube = np.full((len(want), 3, len(idx)), 255, np.uint8)
+    for n, h in enumerate(_open_meteo(MARINE, at, ["wave_height", "wave_period", "wave_direction"])):
+        if not h:
+            continue
+        t = np.array(h["time"], dtype="datetime64[m]")
+        pos = np.minimum(np.searchsorted(t, want), len(t) - 1)
+        hit = t[pos] == want
+        hs, tm, d = (np.array([np.nan if v is None else v for v in h[k]], float)[pos] for k in ("wave_height", "wave_period", "wave_direction"))
+        qm = correction(*at[n])
+        if qm is not None:
+            hs = corrected(hs, qm)
+        for f, (v, step) in enumerate([(hs, 0.1), (sea_tp(tm, True), 0.1), (d % 360, 2)]):
+            ok = hit & np.isfinite(v)
+            cube[ok, f, n] = np.clip(np.round(v[ok] / step), 0, 254)
+    print(f"  enclosed seas: {len(idx)} points", flush=True)
+    return dict(cells=idx, data=base64.b64encode(gzip.compress(cube.tobytes(), 9)).decode())

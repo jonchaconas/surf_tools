@@ -188,6 +188,18 @@ REGIONS = {
         ("Torö", "Södermanland, Sweden", 58.820, 17.840, 180),
         ("Hanko", "Uusimaa, Finland", 59.820, 22.950, 200),
     ]),
+    # Ice-bound from about December to June; WW3's global run leaves it out, so the map reads
+    # Copernicus (inland.BASINS) and these coasts their own cells.
+    "Hudson Bay": dict(extent=(-95.5, -76.5, 51.0, 64.5), coasts=[
+        ("Rankin Inlet", "Kivalliq, Nunavut, Canada", 62.800, -92.080, 135),
+        ("Arviat", "Kivalliq, Nunavut, Canada", 61.100, -94.050, 100),
+        ("Churchill", "Manitoba, Canada", 58.780, -94.200, 10),
+        ("Fort Severn", "Ontario, Canada", 56.020, -87.620, 30),
+        ("Chisasibi", "James Bay, Quebec, Canada", 53.800, -79.100, 270),
+        ("Kuujjuarapik", "Nunavik, Quebec, Canada", 55.280, -77.770, 270),
+        ("Inukjuak", "Nunavik, Quebec, Canada", 58.450, -78.120, 270),
+        ("Akulivik", "Nunavik, Quebec, Canada", 60.810, -78.200, 270),
+    ]),
 }
 OUT = config.DATA / "regions"
 

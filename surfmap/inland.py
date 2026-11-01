@@ -40,6 +40,7 @@ BASINS = {
     "baltic": (1.0, 53.5, 66.0, 10.5, 30.5),
     "red_sea": (1.0, 12.5, 30.0, 32.0, 43.6),
     "persian_gulf": (1.0, 23.5, 30.5, 47.5, 56.6),
+    "hudson_bay": (1.0, 51.0, 64.5, -95.5, -76.5),  # ice-bound most of the year; rated on its open-water mornings
 }
 # North of 42N the Mediterranean box would take in the Bay of Biscay, so it starts at 0E there.
 ATLANTIC_CUT = box(-5.6, 42.0, 0.0, 46.0)

@@ -98,9 +98,11 @@ Breakout tables are listed by year-round consistency.
   arrows for where the swell or wind is heading and a time slider (▶ plays it). The marked spots
   turn red to green by their own forecast at that time. The chart is a 1° grid every 6 hours from
   NOAA WAVEWATCH III and NCEP GFS via NOAA CoastWatch ERDDAP (`chart()` in
-  [`surfmap/forecast.py`](surfmap/forecast.py)), refreshed by the daily job.
-- **Land:** plain, a street map (CARTO, from OpenStreetMap) or satellite imagery (Sentinel-2
-  cloudless by EOX, CC BY-NC-SA 4.0) under the colours.
+  [`surfmap/forecast.py`](surfmap/forecast.py)), refreshed by the daily job. WAVEWATCH III leaves
+  out the Great Lakes and Hudson Bay, so the enclosed seas come from Open-Meteo's marine forecast
+  at the map's own points there.
+- **Land:** plain, or satellite imagery (Sentinel-2 cloudless by EOX, CC BY-NC-SA 4.0) clipped to
+  the coastline.
 - **Plan a trip:** pick a starting point and a reach. The best breaks within it are ranked for
   the months you chose, each with a typical good morning, the water temperature and a wetsuit.
 - **Spot details:** each break shows:

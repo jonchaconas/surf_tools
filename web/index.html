@@ -175,7 +175,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
       <canvas id="map" aria-label="World map of how often the surf is good"></canvas>
       <div class="layerbox">
         <div class="periods" id="mapmode" role="group" aria-label="Map shows"><button class="chip" data-mode="climate" aria-pressed="true">Historical</button><button class="chip" data-mode="forecast">Forecast</button></div>
-        <div class="periods" id="basemap" role="group" aria-label="Land"><button class="chip" data-b="plain" aria-pressed="true">Plain</button><button class="chip" data-b="map">Map</button><button class="chip" data-b="satellite">Satellite</button></div>
+        <div class="periods" id="basemap" role="group" aria-label="Land"><button class="chip" data-b="plain" aria-pressed="true">Plain</button><button class="chip" data-b="satellite">Satellite</button></div>
       </div>
       <div class="attrib" id="attrib" hidden></div>
       <div class="zoombtns"><button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out">−</button><button id="zreset" aria-label="Reset view">⟲</button></div>
@@ -1074,8 +1074,12 @@ const FC_VARS = {
   wind: { name: "wind", unit: "kt", levels: [0, 5, 10, 15, 20, 25, 30, 35, 40, 50, 60], ramp: t => d3.interpolateRdPu(0.1 + 0.9 * t) },
 };
 function loadChart() {  // once; null if there's no chart yet
-  if (!chartLoading) chartLoading = Promise.all([json("data/fcmap.json"), bytes("data/fcmap.b64.txt")]).then(([m, buf]) => {
+  if (!chartLoading) chartLoading = Promise.all([json("data/fcmap.json"), bytes("data/fcmap.b64.txt")]).then(async ([m, buf]) => {
     swellChart = { ...m, data: new Uint8Array(buf), t: m.times.map(t => Date.parse(t)), at: Object.fromEntries(m.fields.map(([n], k) => [n, k])), planes: new Map() };
+    if (m.basin) {  // the Great Lakes, Hudson Bay and other enclosed seas, at the map's own points there
+      const cells = m.basin.cells;
+      swellChart.basin = { cells, data: new Uint8Array(await inflate(m.basin.data)), lat: cells.map(c => meta.cells.lat[c]), lon: cells.map(c => meta.cells.lon[c]) };
+    }
     return swellChart;
   }).catch(() => null);
   return chartLoading;
@@ -1110,7 +1114,34 @@ function chartPlane(t, name) {  // one field at one time: floats, NaN over land,
   }
   c.planes.set(key, v); return v;
 }
-function chartSample(t, name, lat, lon) {  // bilinear, or the nearest cell for a direction
+const BASIN_FIELDS = { hs: [0, 0.1], tp: [1, 0.1], dir: [2, 2] };
+function basinPlane(t, name) {  // an enclosed-sea field at time t, by meta cell index (NaN elsewhere)
+  const c = swellChart, b = c.basin, key = `b${t}:${name}`;
+  if (!b) return null;
+  if (c.planes.has(key)) return c.planes.get(key);
+  const v = new Float32Array(meta.cells.lat.length).fill(NaN), n = b.cells.length;
+  if (name === "power") {
+    const hs = basinPlane(t, "hs"), tp = basinPlane(t, "tp");
+    for (const cell of b.cells) v[cell] = KJ(hs[cell], tp[cell]);
+  } else if (BASIN_FIELDS[name]) {
+    const [f, step] = BASIN_FIELDS[name];
+    b.cells.forEach((cell, k) => { const x = b.data[(t * 3 + f) * n + k]; if (x !== 255) v[cell] = x * step; });
+  } else return null;
+  c.planes.set(key, v); return v;
+}
+function basinSample(t, name, lat, lon) {  // the nearest enclosed-sea point within ~1.5°, or NaN
+  const b = swellChart.basin, v = b && basinPlane(t, name);
+  if (!v) return NaN;
+  let best = NaN, bd = 2.25;
+  const cl = Math.cos(lat * RAD) ** 2;
+  b.cells.forEach((cell, k) => { const d = (b.lat[k] - lat) ** 2 + (((b.lon[k] - lon + 540) % 360) - 180) ** 2 * cl; if (d < bd && v[cell] === v[cell]) { bd = d; best = v[cell]; } });
+  return best;
+}
+function chartSample(t, name, lat, lon) {  // the ocean grid, or the enclosed seas it leaves out
+  const v = gridSample(t, name, lat, lon);
+  return v === v || name === "kt" || name === "wind_from" ? v : basinSample(t, name, lat, lon);
+}
+function gridSample(t, name, lat, lon) {  // bilinear, or the nearest cell for a direction
   const c = swellChart, v = chartPlane(t, name), fi = (lat - c.lat0) / c.step, fj = ((((lon - c.lon0) % 360) + 360) % 360) / c.step;
   if (fi < 0 || fi > c.nlat - 1) return NaN;
   if (name === "dir" || name === "wind_from") return v[Math.round(fi) * c.nlon + (Math.round(fj) % c.nlon)];
@@ -1137,9 +1168,20 @@ function computeChartField() {  // the chosen field at the chosen time on the 0.
     for (let j = 0; j < nlon; j++) {
       const q = i * nlon + j;
       if (cat[q] === 3) { FF[q] = NaN; continue; }
-      const v = chartSample(fcStep, name, lat, -180 + (j + 0.5) * res);
+      const v = gridSample(fcStep, name, lat, -180 + (j + 0.5) * res);
       FF[q] = v === v ? Math.min(100, (100 * fcShown(v)) / top) : NaN;
     }
+  }
+  const bp = name !== "kt" && basinPlane(fcStep, name);
+  if (bp) {  // enclosed seas: blended from their own points, as the historical map is, and their shores read their cell
+    const put = (q, v) => { FF[q] = v === v ? Math.min(100, (100 * fcShown(v)) / top) : NaN; };
+    const { pix, nb, w } = R.basin;
+    for (let k = 0; k < pix.length; k++) {
+      let sum = 0, tw = 0;
+      for (let q = 4 * k; q < 4 * k + 4; q++) { const v = bp[nb[q]]; if (w[q] > 0 && v === v) { sum += v * w[q]; tw += w[q]; } }
+      put(pix[k], tw ? sum / tw : NaN);
+    }
+    for (let c = 0; c < R.pix.length; c++) { const cell = R.sources[R.src[c]]; if (meta.cells.enclosed[cell]) put(R.pix[c], bp[cell]); }
   }
   fieldKey = "";
 }
@@ -1264,14 +1306,11 @@ function fcPointQuality(i) {  // a marked spot at the chart's time: its own fore
   return rec[0] === 255 && rec[6] === 255 ? -1 : session(p, rec).q;
 }
 
-// ---------- land: plain, a street map or satellite imagery under the field ----------
+// ---------- land: plain, or satellite imagery clipped to the coastline ----------
 const BASEMAPS = {
-  map: { max: 18, attrib: "Map © OpenStreetMap contributors © CARTO",
-    url: (z, x, y) => `https://${"abcd"[(x + y) % 4]}.basemaps.cartocdn.com/rastertiles/${isDark() ? "dark_all" : "voyager"}/${z}/${x}/${y}@2x.png` },
   satellite: { max: 15, attrib: "Imagery: Sentinel-2 cloudless 2023 by EOX IT Services GmbH (contains modified Copernicus Sentinel data), CC BY-NC-SA 4.0",
     url: (z, x, y) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2023_3857/default/g/${z}/${y}/${x}.jpg` },
 };
-const isDark = () => { const c = d3.rgb(css("--paper")); return (c.r + c.g + c.b) / 3 < 128; };
 const tileCache = new Map();
 let drawQueued = false;
 const scheduleDraw = () => { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; draw(); }); } };
@@ -1308,12 +1347,6 @@ function draw() {
   ctx.rect(0, dpr * (transform.y + k * y0), canvas.width, dpr * k * (y1 - y0)); ctx.clip();
   ctx.fillStyle = css("--water"); ctx.fillRect(0, 0, canvas.width, canvas.height);
   const forecasting = mapMode === "forecast" && FF;
-  if (basemap !== "plain") for (const o of [-worldW, 0, worldW]) {
-    if (x0 + o > (W - transform.x) / k || x1 + o < -transform.x / k) continue;
-    ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * (transform.x + k * o), dpr * transform.y);
-    drawTiles(o);
-  }
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
   if (fieldVersion) {
     const scale = moving ? 1 : dpr, key = [transform.x, transform.y, k, W, H, scale, fieldVersion, NODATA].join();
     if (key !== fieldKey) { renderField(scale); fieldKey = key; }
@@ -1325,16 +1358,19 @@ function draw() {
     if (x0 + o > vx1 || x1 + o < vx0) continue;
     ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * (transform.x + k * o), dpr * transform.y);
     const tiles = land && k >= 6 && meta.tiles ? viewTiles(o) : null;  // detailed coastline once zoomed in and loaded
-    if (basemap !== "plain") { /* the tiles show the land */ }
-    else if (tiles && tiles.every(t => hiTiles.get(t)?.ready)) {
+    const paintLand = () => {  // the land just pathed: imagery clipped to it, or the plain fill
+      if (basemap === "plain") { ctx.fillStyle = css("--land"); ctx.fill(); return; }
+      ctx.save(); ctx.clip(); drawTiles(o); ctx.restore();
+    };
+    if (tiles && tiles.every(t => hiTiles.get(t)?.ready)) {
       ctx.beginPath(); for (const t of tiles) if (hiTiles.get(t).fill) path(hiTiles.get(t).fill);
-      ctx.fillStyle = css("--land"); ctx.fill();
+      paintLand();
       ctx.beginPath(); for (const t of tiles) if (hiTiles.get(t).coast) path(hiTiles.get(t).coast);
       ctx.strokeStyle = css("--coast"); ctx.lineWidth = 0.6 / k; ctx.stroke();
     } else if (land) {
       ctx.beginPath(); path(land.rest);
       for (const ring of polarXY) { ctx.moveTo(ring[0][0], ring[0][1]); for (const [x, y] of ring) ctx.lineTo(x, y); ctx.closePath(); }
-      ctx.fillStyle = css("--land"); ctx.fill();
+      paintLand();
       ctx.beginPath(); path(land.lines); ctx.strokeStyle = css("--coast"); ctx.lineWidth = 0.6 / k; ctx.stroke();
     }
     if ((osm.length || gaps.length) && k >= 2.5 && !forecasting) {  // OpenStreetMap spots and coast points, once there's room, coloured by their beach

@@ -646,7 +646,12 @@ def build(output, preview_dir=None):
     pages += [(title, maps(title, table, months)) for title, table, months in halves]
     pages += [(calendar.month_name[m], maps(calendar.month_name[m], f"Best named breaks in {calendar.month_name[m]}", (m,)))
               for m in config.MONTHS]
-    pages += [(region, lambda pdf, region=region: region_page(pdf, region, land)) for region in REGIONS]
+    from . import points
+
+    ready = [r for r in REGIONS if all(points.mornings(c[2], c[3]) is not None for c in REGIONS[r]["coasts"])]
+    for region in sorted(set(REGIONS) - set(ready)):
+        print(f"  {region}: left out until all its coasts are downloaded", flush=True)
+    pages += [(region, lambda pdf, region=region: region_page(pdf, region, land)) for region in ready]
     assert pages[stretches_page - 1][0] == "Under-the-radar stretches"
     with PdfPages(output, metadata={"Title": "Predictive Surf Atlas"}) as pdf:
         n = 1

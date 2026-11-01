@@ -136,7 +136,8 @@ def _nearest(dataset, lat, lon, facing, t0, t1, pad=0.3):
                          minimum_longitude=lon - pad, maximum_longitude=lon + pad,
                          minimum_latitude=lat - pad, maximum_latitude=lat + pad,
                          start_datetime=t0.isoformat(), end_datetime=t1.isoformat())
-    sea = np.isfinite(ds["VHM0"].isel(time=slice(0, 16)).values).any(axis=0)
+    # Sea anywhere in the span, not just its first days: frozen seas (Hudson Bay) start the year iced over.
+    sea = np.isfinite(ds["VHM0"].isel(time=slice(None, None, max(1, ds.sizes["time"] // 64))).values).any(axis=0)
     tla, tlo = _out(lat, lon, facing, SEAWARD_DEG)
     la, lo = np.meshgrid(ds.latitude.values, ds.longitude.values, indexing="ij")
     km = np.hypot(la - tla, (lo - tlo) * np.cos(np.radians(lat)))
