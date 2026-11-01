@@ -26,9 +26,12 @@ def seasons(month):
 # Each day is judged on one snapshot near this local solar hour (dawn-patrol conditions).
 LOCAL_HOUR = 8
 
-# A morning is good+ when all of these hold.
+# A morning is good+ when the swell meets either height/period pair (4 ft over 9 s, or 3 ft over
+# 14 s), breaks under MAX_BREAKER, and dominates the wind sea.
 MIN_SWELL_PERIOD = 9.0    # s, swell peak period must exceed this
 MIN_SWELL_HEIGHT = 1.22   # m (4 ft), swell significant height
+LONG_SWELL_PERIOD = 14.0  # s: long-period swell breaks bigger than its height, so it also counts
+LONG_SWELL_HEIGHT = 0.91  # m (3 ft) from LONG_SWELL_PERIOD up
 MAX_BREAKER = 5.0         # m, Komar-Gaughan breaking height; above this most breaks close out
 MAX_WINDSEA_RATIO = 0.35  # wind-sea Hs / swell Hs; low means a clean, swell-dominated sea
 

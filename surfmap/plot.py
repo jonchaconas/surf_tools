@@ -450,10 +450,12 @@ def _new_page(title, subtitle):
 
 
 def _region_subtitle(std, tp_ratio):
-    if std.get("ocean"):
-        rule = rating.rule_text().replace(" Judged on", "\nJudged on")  # too long for one line at this size
-        return (rule + " Open-ocean coasts, so the same good+ standard as the world maps, from M\u00e9t\u00e9o-France "
-                "MFWAM at each coast's ~8 km model cell, with swell aimed at the shore.")
+    if std.get("ocean"):  # the good+ rule in brief; the map pages' footer has it in full
+        return (f"Good+ = swell \u2265 {config.MIN_SWELL_HEIGHT * rating.FT:.0f} ft over {config.MIN_SWELL_PERIOD:g} s, or "
+                f"\u2265 {config.LONG_SWELL_HEIGHT * rating.FT:.0f} ft over {config.LONG_SWELL_PERIOD:g} s; breaking under "
+                f"{config.MAX_BREAKER * rating.FT:.0f} ft; wind sea \u2264 {config.MAX_WINDSEA_RATIO:g}\u00d7 swell; on the "
+                f"~{config.LOCAL_HOUR:02d}:00 sample.\nOpen-ocean coasts: the world maps' good+ standard, read from "
+                f"M\u00e9t\u00e9o-France MFWAM at each coast's ~8 km cell, with swell aimed at the shore.")
     period = (f"dominant period \u2265 {std['min_period']:g} s (taken as {tp_ratio:.2f}\u00d7 the mean period)"
               if std["peak"] else f"mean period \u2265 {std['min_period']:g} s")
     return (f"{std['name']} = total wave height {std['min_hs'] * rating.FT:.0f}\u2013{std['max_hs'] * rating.FT:.0f} ft "
