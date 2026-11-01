@@ -144,7 +144,7 @@ def _inset(fig, rect, title, basins, extent, field, nodata, land, spots, ready):
                 fontsize=6.5, ha="center", va="bottom", transform=PC, zorder=6, path_effects=HALO)
     ax.set_title(title, fontsize=9.5, weight="bold", loc="left", pad=4)
     if any(b not in ready for b in basins):
-        ax.text(0.5, 0.5, "Open-Meteo data for this month\nis still downloading", transform=ax.transAxes,
+        ax.text(0.5, 0.5, "Open-Meteo data is\nstill downloading", transform=ax.transAxes,
                 ha="center", va="center", fontsize=8.5, color=INK_2, zorder=7,
                 bbox=dict(boxstyle="round,pad=0.5", facecolor="white", edgecolor=COAST, linewidth=0.5))
 
@@ -213,9 +213,6 @@ def page(pdf, m, land):
              fontsize=7.5, color=INK_2, va="top")
     lakes = (f" Open-Meteo has no swell peak period on the Great Lakes; it is taken as {m.tp_ratio:.2f}× the "
              f"mean swell period, the median ratio in the other seas." if m.tp_ratio else "")
-    if len(m.ready) < len(inland.BASINS):
-        lakes += (" Enclosed-sea data for these months is still downloading (Open-Meteo free-tier quota), "
-                  "so those seas show as no data until the PDF is rebuilt.")
     fig.text(0.02, 0.011,
              "Offshore sea state only: bathymetry, sheltering, tide and wind direction at each break are not modelled. "
              "Break percentages use the nearest seaward model cell within 250 km." + lakes,
