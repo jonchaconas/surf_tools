@@ -30,8 +30,8 @@ is written to [`surfmap/stretches.py`](surfmap/stretches.py).
 Each day is judged on one model snapshot near 08:00 local solar time. A morning is
 good+ when the swell:
 
-- has a peak period of at least 10 s,
-- breaks between 1.5 and 5 m (Komar–Gaughan breaking height from swell height and period),
+- is at least 4 ft (1.2 m) with a peak period over 9 s;
+- breaks under 16 ft (5 m, Komar–Gaughan breaking height from swell height and period);
 - dominates the sea state, with wind-sea height no more than 0.35× the swell height.
 
 The thresholds live in [`surfmap/config.py`](surfmap/config.py). For the break table,

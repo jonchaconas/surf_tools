@@ -274,7 +274,8 @@ class Period:
         # Grow the mask onto land too, so the land layer's finer coastline leaves no slivers of
         # extrapolated colour along shores without data. Real water data is never covered.
         nodata |= binary_dilation(nodata, iterations=2) & ~water
-        return _fill_nearest(grid), nodata
+        # Clamp: interpolation can leave -1e-19 and the like, which falls outside the 0% contour band.
+        return np.clip(_fill_nearest(grid), 0, 100), nodata
 
     def spots(self):
         """Per named break: % of mornings that are good+ AND arrive from the break's swell window."""

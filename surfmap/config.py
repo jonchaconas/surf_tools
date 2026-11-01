@@ -27,9 +27,9 @@ def seasons(month):
 LOCAL_HOUR = 8
 
 # A morning is good+ when all of these hold.
-MIN_SWELL_PERIOD = 10.0   # s, swell peak period
-MIN_BREAKER = 1.5         # m, Komar-Gaughan breaking height of the swell
-MAX_BREAKER = 5.0         # m, above this most breaks close out or need a big-wave crew
+MIN_SWELL_PERIOD = 9.0    # s, swell peak period must exceed this
+MIN_SWELL_HEIGHT = 1.22   # m (4 ft), swell significant height
+MAX_BREAKER = 5.0         # m, Komar-Gaughan breaking height; above this most breaks close out
 MAX_WINDSEA_RATIO = 0.35  # wind-sea Hs / swell Hs; low means a clean, swell-dominated sea
 
 # Spot rankings also require the swell to come from within this many degrees of the facing.
