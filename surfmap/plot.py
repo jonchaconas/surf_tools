@@ -1,6 +1,7 @@
 """Render one PDF page per month: world contour map, enclosed-sea insets, best-breaks table."""
 
 import calendar
+import json
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -366,7 +367,7 @@ def _breakout_page(pdf, title, subtitle, kind, rows, notes):
         ax.text(x_best, y, f"{best} {best_pct:.0f}%", fontsize=size, va="center")
         good = (f"{r['hs'] * rating.FT:.0f} ft @ {r['tp']:.0f} s {_compass(r['dir'], degrees=False)}, "
                 f"surf ~{r['hb'] * rating.FT:.0f} ft") if np.isfinite(r["hs"]) else "\u2013"
-        ax.text(x_tide, y, _tide_text(r["name"]), fontsize=size, color=INK_2, va="center")
+        ax.text(x_tide, y, r.get("tide") or _tide_text(r["name"]), fontsize=size, color=INK_2, va="center")
         ax.text(x_swell, y, good, fontsize=size, color=INK_2, va="center")
         ax.text(x_wind, y, _wind_text(r["wind"]) or "\u2013", fontsize=size, color=INK_2, va="center")
 
@@ -403,6 +404,24 @@ def stretch_page(pdf):
              f"(Copernicus Marine, ~8 km), either swell train, with ERA5 morning wind \u2264 {config.MAX_WIND_KT:g} kt "
              f"or offshore. Check local reefs and access before booking a trip.")
     return _breakout_page(pdf, "Under-the-radar stretches, month by month", subtitle, "Stretch", rows, notes)
+
+
+def uncharted_page(pdf):
+    """The atlas's uncharted coast (export._uncharted): best shoreline far from any charted spot."""
+    from .export import OUT, UNCHARTED_KM
+
+    path = OUT / "uncharted.json"
+    if not path.exists():
+        return None
+    rows = [dict(r, tag=f"\u2736{n}", region=f"{r['region']} \u00b7 {r['charted_km']:,} km from charted surf", wind=None)
+            for n, r in enumerate(json.loads(path.read_text()), 1)]
+    subtitle = (f"Shoreline that's often good+ by Jon's Criteria but at least {UNCHARTED_KM} km from every named break, "
+                f"regional coast and surf spot mapped in OpenStreetMap,\nnamed after the nearest town. "
+                f"Each is rated as the atlas rates its coast: the nearest offshore model cell, counting only swell "
+                f"from the directions this shore is open to.")
+    notes = ("Uncharted here means not mapped: plenty of these coasts are surfed by locals, and many are remote or "
+             "hard to reach. The wave model has no reefs or sandbars; check access and local knowledge before going.")
+    return _breakout_page(pdf, "Uncharted coast, month by month", subtitle, "Nearest town", rows, notes)
 
 
 POPULAR_ROWS = 40
@@ -626,7 +645,7 @@ def build(output, preview_dir=None):
 
     (year, *halves) = config.SUMMARIES
     pages = [(year[0], maps(*year))]
-    pages += [("Popular breaks", spot_page), ("Under-the-radar stretches", stretch_page)]
+    pages += [("Popular breaks", spot_page), ("Under-the-radar stretches", stretch_page), ("Uncharted coast", uncharted_page)]
     pages += [(title, maps(title, table, months)) for title, table, months in halves]
     pages += [(calendar.month_name[m], maps(calendar.month_name[m], f"Best named breaks in {calendar.month_name[m]}", (m,)))
               for m in config.MONTHS]

@@ -1631,5 +1631,7 @@ async function localTools() {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", retheme);
   new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
   localTools();
+  // Installable app (manifest + offline cache) where served over https, e.g. GitHub Pages.
+  if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 })();
 </script>

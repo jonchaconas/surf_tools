@@ -35,10 +35,12 @@ jobs:
       - name: Assemble the site
         run: |
           mkdir -p _site
-          cp -r web/data _site/data
+          cp -r web/data web/*.png web/manifest.webmanifest web/sw.js _site/
           {
             printf '%s' '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            printf '%s' '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body>'
+            printf '%s' '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+            printf '%s' '<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#0b7480"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="apple-touch-icon.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Surf Atlas">'
+            printf '%s' '</head><body>'
             cat web/index.html
           } > _site/index.html
           touch _site/.nojekyll

@@ -347,6 +347,74 @@ PALESTINE_COAST = [("'Akka", 32.927, 35.074), ("Al-Tantura", 32.607, 34.918), ("
                    ("Rafah", 31.287, 34.245), ("Umm al-Rashrash", 29.557, 34.952)]
 
 
+UNCHARTED_KM, UNCHARTED_N = 300, 20
+
+
+def _good_codes():
+    """Bin codes (h ft, t s, chop) that pass Jon's Criteria as the page's default preset reads them."""
+    h, t, c = np.meshgrid(np.arange(H_BINS), np.arange(T_BINS) + 5, np.arange(6), indexing="ij")
+    size = ((h >= 4) & (t >= 9)) | ((h >= 3) & (t >= 14))
+    with np.errstate(invalid="ignore"):
+        brk = rating.breaker_height((h + 0.5) / rating.FT, t + 0.5) * rating.FT <= 16
+    return (size & (c <= 1) & brk).ravel()  # indexed by (h * T_BINS + t) * 6 + c
+
+
+def _uncharted(samples, band):
+    """The best shoreline far from every charted spot, by Jon's Criteria and the coast's own exposure,
+    as the atlas reckons it: UNCHARTED_N stretches at least UNCHARTED_KM from charted surf and from
+    each other, each with monthly %, a typical good morning, tide range and its nearest town."""
+    from scipy.spatial import cKDTree
+
+    from .discover import _xyz
+
+    good = _good_codes()
+    cand = np.flatnonzero((band["alpha"] == 1) & (band["charted"] >= UNCHARTED_KM) & (band["lat"] > -60) & (band["lat"] < 72))
+    stats = {}  # source cell -> (good[12, 16], days[12], good bins per month)
+    for s in np.unique(band["src"][cand]):
+        g, d, bins = np.zeros((12, 16)), np.zeros(12), []
+        for m in range(12):
+            _, codes, valid, _ = samples(int(s), m)
+            dc = codes[valid].astype(int)
+            ok = good[dc >> 4]
+            np.add.at(g[m], dc[ok] & 15, 1)
+            d[m] = valid.sum()
+            bins.append(dc[ok])
+        stats[int(s)] = (g, d, bins)
+    rows = []
+    for i in cand:
+        g, d, _ = stats[int(band["src"][i])]
+        w = band["open"][i] / 255.0
+        months = np.where(d > 0, 100 * (g * w).sum(1) / np.maximum(d, 1), np.nan)
+        rows.append((100 * (g * w).sum() / max(d.sum(), 1), i, months))
+    rows.sort(key=lambda r: -r[0])
+    places = _places()
+    ptree = cKDTree(_xyz(np.array([p[3] for p in places]), np.array([p[4] for p in places])))
+    chosen, out = [], []
+    for pct, i, months in rows:
+        here = _xyz(band["lat"][i:i + 1], band["lon"][i:i + 1])[0]
+        if any(np.linalg.norm(here - c) * 6371 < UNCHARTED_KM for c in chosen):
+            continue
+        chosen.append(here)
+        _, _, bins = stats[int(band["src"][i])]
+        dc = np.concatenate(bins)
+        wt = band["open"][i][dc & 15] / 255.0
+        base = dc >> 4
+        hft, tp = base // (T_BINS * 6) + 0.5, (base // 6) % T_BINS + 5.5
+        med = lambda v: float(v[np.searchsorted(np.cumsum(wt[np.argsort(v)]), wt.sum() / 2)]) if wt.sum() else np.nan
+        hs, tpm = med(hft) / rating.FT, med(tp)
+        sector = int(np.argmax(np.bincount(dc & 15, weights=wt, minlength=16)))
+        k = ptree.query(here)[1]
+        cons = tides._constituents(float(band["lat"][i]), float(band["lon"][i]))
+        rng = tides._ranges(cons) if cons else None
+        out.append(dict(name=places[k][0], region=places[k][2], lat=round(float(band["lat"][i]), 3), lon=round(float(band["lon"][i]), 3),
+                        charted_km=int(band["charted"][i]), pct=round(float(pct), 1), months=[round(float(v), 1) for v in months],
+                        hs=round(hs, 2), tp=round(tpm, 1), dir=sector * 22.5, hb=round(float(rating.breaker_height(hs, tpm)), 2),
+                        tide=f"{rng[0] * rating.FT:.0f}–{rng[1] * rating.FT:.0f} ft" if rng else "none"))
+        if len(out) == UNCHARTED_N:
+            break
+    return out
+
+
 def _places():
     """[[name, region, country, lat, lon]] for every Natural Earth populated place (10m), so the page
     can name any stretch of coast after its nearest town (see PALESTINE)."""
@@ -540,7 +608,7 @@ def _raster(cells, res, land, charted):
         basin=dict(pix=bpix, nb=bnb, w=bw),
         coast=dict(n=len(ci), fringe=len(fringe), sources=sources,
                    data=base64.b64encode(gzip.compress(coast_bin, 9)).decode("ascii")),
-    ), sources, (clat[ok][alpha == 1], clon[ok][alpha == 1])
+    ), sources, dict(lat=clat[ok], lon=clon[ok], open=masks, src=src, alpha=alpha, charted=charted_km)
 
 
 def export(res=2):
@@ -571,8 +639,10 @@ def export(res=2):
     (OUT / "osm.json").write_text(json.dumps([[*o, sst.monthly(o[1], o[2])] for o in surf], separators=(",", ":"), ensure_ascii=False))
     charted = [(la, lo) for _, _, la, lo, _ in SPOTS] + [(la, lo) for _, la, lo in surf] + \
         [(c[2], c[3]) for spec in regions.REGIONS.values() for c in spec["coasts"]]
-    raster, sources, shore = _raster(cells, res, land, charted)
+    raster, sources, band = _raster(cells, res, land, charted)
+    shore = (band["lat"][band["alpha"] == 1], band["lon"][band["alpha"] == 1])
     gaps = [[*g, sst.monthly(g[2], g[3])] for g in _coast_points(shore, charted + [(e[2], e[3]) for e in STRETCHES])]
+    (OUT / "uncharted.json").write_text(json.dumps(_uncharted(samples, band), separators=(",", ":"), ensure_ascii=False))
     (OUT / "coastpts.json").write_text(json.dumps(gaps, separators=(",", ":"), ensure_ascii=False))
     print(f"  coast points filling the gaps: {len(gaps)}", flush=True)
     (OUT / "raster.json").write_text(json.dumps(raster, separators=(",", ":")))

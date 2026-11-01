@@ -1,9 +1,10 @@
 # surf_tools
 
-Where is the surf good, and when? This repo turns five years of wave-model history into the
-**Predictive Surf Atlas**: a 26-page PDF of world maps for every month, ranked tables of famous
-breaks and little-known coast, and close-ups of regions such as the Great Lakes and the
-Mediterranean, plus an interactive version where you set your own definition of good.
+Where is the surf good, and when? This repo turns ten years of wave-model history (2017–2026) into
+the **Predictive Surf Atlas**:
+- a PDF of world maps for every month, ranked tables of famous breaks and little-known coast, and
+  regional close-ups such as California, the Great Lakes, the Mediterranean and the Baltic;
+- an interactive atlas where you set your own definition of good, with a 7-day forecast.
 
 **[Download the PDF](predictive_surf_atlas.pdf)** · **[Open the interactive atlas](https://jonchaconas.github.io/surf_tools/)**
 
@@ -66,11 +67,33 @@ Breakout tables are listed by year-round consistency.
   - minimum swell size and period, and the long-period alternative;
   - the largest surf you want;
   - the morning wind allowed at the breaks;
-  - how far off a break's facing the swell may arrive;
+  - how far off a break's facing the swell may arrive (breaks with a known swell window use it);
+  - the tide, low to high, as a share of each break's own range;
   - how much wind chop to allow out at sea.
 
-  The map and the best-spots list update as you go. Presets include small groundswell,
+  The map and the lists update as you go. Presets include Jon's Criteria, small groundswell,
   longboard, shortboard, big days and lake surf.
+- **When:** any combination of months, a range of years (2017–2026), and the time of day: dawn,
+  morning, midday, afternoon or evening. Time of day applies to the marked spots, the forecast
+  and the lists; the map's colours are mornings.
+- **This week:** the coming mornings at every marked break, judged by your criteria. Sources:
+  - waves: CDIP's forecast in California, Copernicus Marine (or Open-Meteo) elsewhere;
+  - wind: Open-Meteo;
+  - tide: computed in the page.
+
+  A daily GitHub job refreshes it.
+- **Plan a trip:** pick a starting point and a reach. The best breaks within it are ranked for
+  the months you chose, each with a typical good morning, the water temperature and a wetsuit.
+- **Spot details:** each break shows:
+  - the water temperature and wetsuit;
+  - its swell window;
+  - a buoy check: how the model compared with the nearest wave buoy.
+- **Find and keep:** a search over breaks, surf spots and towns; ☆ Save (My spots); compare up
+  to three spots; links that reopen exactly what you're looking at.
+- **Map:** it wraps across the date line, loads 1:10m coastline when zoomed in, and has a
+  clickable coast point at least every ~200 km. Place names in Palestine are Arabic.
+- **Installable:** on phones the GitHub page installs as an app and caches its data for offline
+  use.
 
 To make the map work in a browser, each month's mornings for the grid cells are pre-counted into
 bins of swell height × period × chop by [`surfmap/export.py`](surfmap/export.py), so any criteria
@@ -78,11 +101,12 @@ reduce to sums over bins. For the coastal band, the counts are also split by the
 direction the swell comes from. The breaks, stretches and regional coasts ship their raw
 mornings instead (both swell trains and the wind), so every setting applies to them exactly.
 
-The data in `web/data/` is about 20 MB. It holds:
-- a 2° ocean grid and the enclosed-sea points;
+The page loads about 30 MB at first; more loads on demand. `web/data/` holds:
+- a 2° ocean grid and the enclosed-sea points, all years together and per year;
 - the 0.25° coastal band: for each coastal pixel, which directions are open (found by casting
   rays over a 0.05° land mask) and which model cell it reads;
-- every morning at the ~260 marked points.
+- every morning at the ~250 marked points, one file per time of day;
+- 1:10m coastline tiles, OpenStreetMap spots, towns and the forecast.
 
 Run it locally, at 1° resolution, with buttons to download new data and rebuild the PDF:
 
@@ -96,7 +120,8 @@ setting: Settings → Pages → Deploy from a branch → `gh-pages`, `/ (root)`.
 
 ## What counts as good
 
-Each day is judged on **one model snapshot near 08:00 local solar time**.
+Each day is judged on **one model snapshot near 08:00 local solar time** (the atlas can also use
+dawn, midday, afternoon or evening for the marked spots).
 
 **Good+, or Jon's Criteria** (open ocean): the swell is
 
@@ -116,7 +141,7 @@ from the wave model's ~8 km cell at the break, with real morning wind:
 
 The open-ocean map colours keep the wind-sea test, since they have no shoreline to be offshore of.
 
-**Enclosed seas** (Great Lakes, Mediterranean, Black Sea, Caspian) rarely see groundswell. Their
+**Enclosed seas** (Great Lakes, Mediterranean, Black Sea, Caspian, Baltic, Red Sea, Persian Gulf) rarely see groundswell. Their
 map contours and inset labels therefore use a relaxed standard: total waves **4–10 ft** at a
 **dominant period of at least 6 s**.
 
@@ -125,8 +150,8 @@ The regional pages use the standard that suits each coast:
 | Standard | Rule | Used on |
 |---|---|---|
 | Good lake surf | total waves 4–10 ft at a dominant period ≥ 6 s, aimed at the shore | Lake Michigan, Lake Superior |
-| Surfable windswell | total waves 3–10 ft at a mean period ≥ 5 s, aimed at the shore | Mediterranean, Greece, Caspian, Black Sea |
-| Good+ | the break rule above | Madagascar, Peru |
+| Surfable windswell | total waves 3–10 ft at a mean period ≥ 5 s, aimed at the shore | Mediterranean, Greece, Caspian, Black Sea, Baltic |
+| Good+ | the break rule above | Madagascar, Peru, California |
 
 All thresholds live in [`surfmap/config.py`](surfmap/config.py) and
 [`surfmap/regions.py`](surfmap/regions.py).
@@ -152,14 +177,17 @@ named after the nearest seaside town and written to
 | Open-ocean waves | NOAA WAVEWATCH III global model, University of Hawaiʻi run, via [PacIOOS ERDDAP](https://pae-paha.pacioos.hawaii.edu/erddap/griddap/ww3_global.html) | 1°, plus 0.5° over East and Southeast Asia |
 | California breaks | [CDIP MOP v1.1](https://cdip.ucsd.edu/MOP_v1.1/) nearshore model (Scripps): waves carried in to 10–15 m depth every 100 m, with island shadows, refraction and shoaling ([`surfmap/cdip.py`](surfmap/cdip.py)) | the site nearest each break |
 | Other breaks, stretches, regional coasts | Météo-France MFWAM via [Copernicus Marine](https://marine.copernicus.eu): the global analysis from Nov 2022 and the WAVERYS reanalysis before, both swell partitions ([`surfmap/points.py`](surfmap/points.py)) | ~8 km (0.2° before Nov 2022) at each break |
-| Morning wind at breaks | [ERA5](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-timeseries) 10 m wind, point time series from the Climate Data Store | 0.25°, just offshore of each break |
+| Wind | [ERA5](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-timeseries) 10 m wind, point time series from the Climate Data Store | 0.25°, just offshore of each break, and along every coast for the map |
 | Enclosed-sea map grids | MFWAM via the [Open-Meteo Marine API](https://open-meteo.com/en/docs/marine-weather-api) and Copernicus Marine | 0.75–2° grids for the map insets |
-| Tides | [EOT20](https://www.seanoe.org/data/00683/79489/) global ocean tide model (DGFI-TUM, CC BY 4.0) | 1/8° |
+| Tides | [EOT20](https://www.seanoe.org/data/00683/79489/) global ocean tide model (DGFI-TUM, CC BY 4.0); predicted with astronomical arguments and nodal corrections ([`surfmap/tides.py`](surfmap/tides.py)), r 0.97–0.99 against NOAA's predictions | 1/8° |
+| Water temperature | [NOAA OISST v2.1](https://psl.noaa.gov/data/gridded/data.noaa.oisst.v2.highres.html) 1991–2020 monthly means ([`surfmap/sst.py`](surfmap/sst.py)) | 1/4° |
+| Buoy check | [NOAA NDBC](https://www.ndbc.noaa.gov) and CDIP buoys, 108 buoy–spot pairs ([`surfmap/buoys.py`](surfmap/buoys.py)) | buoys within ~150 km |
+| Forecast | CDIP MOP forecast, Copernicus MFWAM forecast or [Open-Meteo](https://open-meteo.com), Open-Meteo wind ([`surfmap/forecast.py`](surfmap/forecast.py)) | 7–8 days |
 | Coastlines, towns | [Natural Earth](https://www.naturalearthdata.com) | 1:50m and 1:10m |
 | Surf spots (atlas) | [OpenStreetMap](https://www.openstreetmap.org/copyright) features tagged sport=surfing, © OpenStreetMap contributors, ODbL | points |
 
-**Seasons.** Each month uses its five most recent complete years: November–December use
-2021–2025, and January–October use 2022–2026.
+**Seasons.** Each month uses its ten most recent complete years, back to the WAVEWATCH III
+archive's start in January 2017: January–October use 2017–2026, November–December 2017–2025.
 
 **Gaps.** WAVEWATCH III has a few outages, for example 1–15 November 2025. Missing days are
 dropped from every source so they all cover the same mornings.
@@ -189,11 +217,13 @@ uv run python -m surfmap fetch --source ww3         # open-ocean waves (~2 GB)
 uv run python -m surfmap fetch --source points      # waves + ERA5 wind at every break (~1-2 h)
 uv run python -m surfmap fetch --source cdip        # California nearshore waves (CDIP, no login)
 uv run python -m surfmap fetch --source osm         # OpenStreetMap surf spots for the atlas
+uv run python -c "from surfmap import sst, buoys, coastwind; sst.fetch(); buoys.fetch(); buoys.validate(); coastwind.fetch()"
 uv run python -m surfmap fetch --source inland      # enclosed-sea grids from Open-Meteo (free-tier quota)
 uv run python -m surfmap fetch --source copernicus  # fills anything Open-Meteo hasn't delivered
 uv run python -m surfmap discover                   # optional: re-find the under-the-radar stretches
 uv run python -m surfmap build                      # writes predictive_surf_atlas.pdf
 uv run python -m surfmap export --res 2             # data for the interactive atlas (web/data)
+uv run python -m surfmap forecast                   # the coming week (also run daily on GitHub)
 ```
 
 **Downloads.** Everything is cached in `data/`, which git ignores, and every fetch can be
@@ -211,7 +241,8 @@ points from the same model with no quota.
 | Module | Role |
 |---|---|
 | `config.py`, `rating.py` | Seasons, sampling hour, the good+ rule |
-| `ww3.py`, `points.py`, `cdip.py`, `inland.py`, `cmems.py`, `tides.py`, `osm.py` | One module per data source |
+| `ww3.py`, `points.py`, `cdip.py`, `inland.py`, `cmems.py`, `tides.py`, `sst.py`, `osm.py`, `coastwind.py` | One module per data source |
+| `forecast.py`, `buoys.py`, `refract.py` | The coming week; the buoy check; nearshore refraction (built, off: see Limitations) |
 | `regions.py` | The regional pages' coasts and standards |
 | `analysis.py` | Reduces each month to counts, and sums months into periods for the maps and tables |
 | `plot.py` | Renders the pages |
@@ -235,8 +266,14 @@ points from the same model with no quota.
     likely underrated.
   - The coastal band's island and headland shading is geometric (sight lines), not a wave
     model.
+- **Refraction is off.** [`surfmap/refract.py`](surfmap/refract.py) bends swell in over ETOPO
+  2022 bathymetry. It matches CDIP in California, but elsewhere the bathymetry is too coarse
+  for reefs, points and canyons, and it all but erases Puerto Escondido, the Mentawais and
+  Chicama, so it stays off (`config.REFRACT`).
+- **Model bias.** The buoy check shows where the model runs high or low. For example:
+  - the US East Coast reads low and Oahu reads high;
+  - the Great Lakes under-call storms, so lake counts are probably 2–3× too low.
 - **Wind at 0.25°.** ERA5 smooths local effects such as sea breezes and canyon winds.
-- **One sample a day.** Each morning is judged on a single snapshot near 08:00; a session
-  later in the day may differ.
+- **One sample a day.** Each day is judged on a single snapshot at the chosen time.
 - **Coarse enclosed-sea grids.** The map insets use coarse grids (0.75–2°). The regional
   pages, read at each coast's own ~8 km cell, are more reliable.

@@ -17,7 +17,9 @@ from . import config
 
 WEB = config.ROOT / "web"
 HEAD = (b'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        b'<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body>')
+        b'<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+        b'<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#0b7480"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="apple-touch-icon.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Surf Atlas">'
+        b'</head><body>')
 
 
 class _Jobs:
