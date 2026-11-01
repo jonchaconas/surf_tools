@@ -127,6 +127,10 @@ Breakout tables are listed by year-round consistency.
   [`android/predictive-surf-atlas.apk`](android/predictive-surf-atlas.apk): the same page in a
   WebView, built by [`.github/workflows/android.yml`](.github/workflows/android.yml) whenever
   `android/` changes. Allow installs from your browser to sideload it.
+- **Live buoys:** NOAA NDBC's wave buoys on the map (◇), labelled with their swell (or all
+  waves) in feet and seconds once zoomed in. Click one for the swell and wind-wave split, all
+  waves, wind, water and air, and the last day's heights. [`surfmap/livebuoys.py`](surfmap/livebuoys.py)
+  fetches them; [`.github/workflows/buoys.yml`](.github/workflows/buoys.yml) refreshes them hourly.
 - **Opening view:** a bare link opens on the forecast at the marked break nearest you (the browser
   asks for your location), else at your first saved spot. Clicking a forecast square moves the
   forecast map to that moment.

@@ -1,0 +1,37 @@
+# Refreshes the atlas's live buoys (web/data/buoys_live.json, from NOAA NDBC) every hour, by
+# committing just that file onto the published gh-pages branch; the full publish (pages.yml) also
+# writes it. The page can't read NDBC itself: NDBC sends no CORS headers.
+name: Live buoys
+
+on:
+  schedule:
+    - cron: "20 * * * *"  # NDBC posts most buoys by about 20 past the hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages  # never alongside a full publish; that one cancels this
+  cancel-in-progress: false
+
+jobs:
+  buoys:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Latest readings
+        run: uv run python -m surfmap buoys
+      - name: Publish to gh-pages
+        run: |
+          git fetch -q --depth 1 origin gh-pages
+          git worktree add -q ../site FETCH_HEAD
+          cp web/data/buoys_live.json ../site/data/buoys_live.json
+          cd ../site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/buoys_live.json
+          git diff --cached --quiet && exit 0
+          git commit -q -m "Live buoys $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q origin HEAD:gh-pages

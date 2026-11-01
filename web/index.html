@@ -48,6 +48,9 @@ canvas#map { width: 100%; height: 100%; display: block; cursor: crosshair; touch
 .attrib { position: absolute; right: 8px; bottom: 4px; font: 10px var(--body); color: var(--muted); max-width: 55%; text-align: right;
   background: color-mix(in srgb, var(--panel) 80%, transparent); padding: 1px 6px; border-radius: 3px; }
 .fcrow { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.buoykey { display: inline-block; width: 8px; height: 8px; border: 1.5px solid var(--accent); background: var(--panel); transform: rotate(45deg); }
+.spark { display: block; margin: 4px 0 2px; }
+.spark text { font: 10px var(--data); fill: var(--muted); }
 .fcrow input { flex: 1; min-width: 120px; }
 #fctime { font: 12px var(--data); white-space: nowrap; }
 .zoombtns button { width: 34px; height: 34px; font: 600 18px var(--body); border: 1px solid var(--rule); background: var(--panel); color: var(--ink); border-radius: 4px; cursor: pointer; }
@@ -185,6 +188,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
       <div class="layerbox">
         <div class="periods" id="mapmode" role="group" aria-label="Map shows"><button class="chip" data-mode="climate" aria-pressed="true">Historical</button><button class="chip" data-mode="forecast">Forecast</button></div>
         <div class="periods" id="basemap" role="group" aria-label="Land"><button class="chip" data-b="plain" aria-pressed="true">Plain</button><button class="chip" data-b="satellite">Satellite</button></div>
+        <div class="periods"><button class="chip" id="buoytoggle" aria-pressed="true" title="Live wave buoys (NOAA NDBC), updated hourly">Buoys</button></div>
       </div>
       <div class="attrib" id="attrib" hidden></div>
       <div class="zoombtns"><button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out">−</button><button id="zreset" aria-label="Reset view">⟲</button></div>
@@ -199,7 +203,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
         <div id="fcfoot" hidden style="margin-top:4px">Spots coloured by their forecast at that time, red to green (green is good by your criteria) · arrows show where the swell, or the wind, is heading · NOAA WAVEWATCH III and GFS, 1°, every 3 hours</div>
         <div id="climfoot">
         <label class="row" for="minpct" style="margin-top:6px">Show spots good at least <span class="val" id="minpctv"></span><input type="range" id="minpct" min="0" max="80" step="5" value="10"></label>
-        <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast &nbsp; ✶ uncharted &nbsp; · surf spot (OSM) &nbsp; ▪ coast point &nbsp; <span class="swatch" style="background:var(--nodata)"></span>no data · click anywhere</div>
+        <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast &nbsp; ✶ uncharted &nbsp; · surf spot (OSM) &nbsp; ▪ coast point &nbsp; <span class="buoykey"></span> live buoy &nbsp; <span class="swatch" style="background:var(--nodata)"></span>no data · click anywhere</div>
         </div>
       </div>
       <div class="loading" id="loading">Loading the model data…</div>
@@ -1087,6 +1091,7 @@ function layout() {
   zoom.extent([[0, 0], [W, H]]).translateExtent(bandRect);
   if (!R) return;
   pointXY = meta.points.map(p => projection([p.lon, p.lat]));
+  for (const b of liveBuoys) b.xy = projection([b.lon, b.lat]);
   for (const o of [...osm, ...gaps]) o.xy = projection([o.lon, o.lat]);
   polarXY = land.polar.map(ring => ring.map(p => projection(p)));
   fieldKey = "";
@@ -1541,12 +1546,13 @@ function draw() {
           ctx.strokeText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); ctx.fillText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); });
       }
     }
+    if (showBuoys && liveBuoys.length) drawBuoys(k);
     if (trip) {  // the trip's reach
       ctx.beginPath(); path(d3.geoCircle().center([trip.lon, trip.lat]).radius(tripKm() / 111.2)());
       ctx.setLineDash([6 / k, 4 / k]); ctx.strokeStyle = css("--accent"); ctx.lineWidth = 1.5 / k; ctx.stroke(); ctx.setLineDash([]);
     }
     if (selected) {
-      const xy = selected.type === "point" ? pointXY[selected.i] : projection([selected.lon, selected.lat]);
+      const xy = selected.type === "point" ? pointXY[selected.i] : selected.type === "buoy" ? projection([selected.b.lon, selected.b.lat]) : projection([selected.lon, selected.lat]);
       if (xy) {
         ctx.beginPath(); ctx.arc(xy[0], xy[1], 10 / k, 0, 2 * Math.PI);
         ctx.strokeStyle = css("--panel"); ctx.lineWidth = 5 / k; ctx.stroke();
@@ -1572,6 +1578,65 @@ d3.select(canvas).call(zoom).on("dblclick.zoom", null);
 document.getElementById("zin").onclick = () => d3.select(canvas).transition().duration(250).call(zoom.scaleBy, 2);
 document.getElementById("zout").onclick = () => d3.select(canvas).transition().duration(250).call(zoom.scaleBy, 0.5);
 document.getElementById("zreset").onclick = () => d3.select(canvas).transition().duration(300).call(zoom.transform, d3.zoomIdentity);
+// ---------- live buoys: NOAA NDBC's latest readings (surfmap/livebuoys.py, refreshed hourly) ----------
+let liveBuoys = [], buoysAt = "", showBuoys = true;
+function setupBuoys(d) {
+  if (!d?.buoys) return;
+  liveBuoys = d.buoys; buoysAt = d.generated;
+  liveBuoys.forEach(b => { b.xy = projection && projection([b.lon, b.lat]); });
+  draw();
+}
+const buoyMain = b => (b.swh != null ? { h: b.swh, t: b.swp, d: b.swd, what: "swell" } : { h: b.hs, t: b.dpd, d: b.mwd != null ? compass(b.mwd) : null, what: "waves" });
+function drawBuoys(k) {  // diamonds, with the swell (or all waves) as feet and seconds once zoomed in
+  const r = 3.4 / k, acc = css("--accent"), panel = css("--panel");
+  ctx.lineWidth = 1.5 / k;
+  for (const b of liveBuoys) {
+    if (!b.xy) continue;
+    const [x, y] = b.xy;
+    ctx.beginPath(); ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath();
+    ctx.fillStyle = panel; ctx.fill(); ctx.strokeStyle = acc; ctx.stroke();
+  }
+  if (k < 3) return;
+  ctx.font = `600 ${10 / k}px ${css("--data").split(",")[0]}`; ctx.lineJoin = "round";
+  const taken = [];  // labels already placed: one that would overlap them is left off
+  for (const b of liveBuoys) {
+    if (!b.xy) continue;
+    const m = buoyMain(b); if (m.h == null) continue;
+    const text = `${Math.round(m.h * FT)}ft${m.t ? " " + Math.round(m.t) + "s" : ""}`, x = b.xy[0] + 5 / k, y = b.xy[1] - 4 / k;
+    const box = [x, y - 9 / k, x + ctx.measureText(text).width, y + 2 / k];
+    if (taken.some(t => box[0] < t[2] && box[2] > t[0] && box[1] < t[3] && box[3] > t[1])) continue;
+    taken.push(box);
+    ctx.strokeStyle = panel; ctx.lineWidth = 3 / k; ctx.strokeText(text, x, y); ctx.fillStyle = acc; ctx.fillText(text, x, y);
+  }
+}
+document.getElementById("buoytoggle").onclick = e => { showBuoys = !showBuoys; e.target.setAttribute("aria-pressed", showBuoys); draw(); };
+function spark(hist) {  // the last day: all waves (ink) and swell (accent), feet against hours ago
+  const pts = hist.filter(h => h[1] != null);
+  if (pts.length < 3) return "";
+  const W = 340, H = 64, top = Math.max(...pts.map(h => Math.max(h[1], h[2] ?? 0))) * FT * 1.15 || 1;
+  const x = ago => 4 + (1 - ago / 24) * (W - 8), y = ft => H - 14 - (ft / top) * (H - 22);
+  const line = (k, colour) => { const q = pts.filter(h => h[k] != null); return q.length > 1 ? `<polyline fill="none" stroke="${colour}" stroke-width="1.6" points="${q.map(h => `${x(h[0]).toFixed(1)},${y(h[k] * FT).toFixed(1)}`).join(" ")}"/>` : ""; };
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Wave height over the last day">` +
+    line(1, "var(--ink)") + line(2, "var(--accent)") +
+    `<text x="4" y="${H - 2}">24 h ago</text><text x="${W - 4}" y="${H - 2}" text-anchor="end">now</text>` +
+    `<text x="4" y="9">${Math.round(top)} ft</text></svg>`;
+}
+function buoyHtml(b) {
+  const ago = Math.round((Date.now() - Date.parse(b.t)) / 60000), m = buoyMain(b), ft = v => (v * FT).toFixed(1);
+  const rows = [];
+  if (b.swh != null) rows.push(["Swell", `${ft(b.swh)} ft at ${b.swp ?? "–"} s${b.swd ? " from " + b.swd : ""}`]);
+  if (b.wwh != null) rows.push(["Wind waves", `${ft(b.wwh)} ft at ${b.wwp ?? "–"} s${b.wwd ? " from " + b.wwd : ""}`]);
+  rows.push(["All waves", `${ft(b.hs)} ft · dominant period ${b.dpd ?? "–"} s, average ${b.apd ?? "–"} s${b.mwd != null ? ` · from ${compass(b.mwd)} (${Math.round(b.mwd)}°)` : ""}`]);
+  if (b.kt != null) rows.push(["Wind", `${Math.round(b.kt)} kt${b.gust != null ? `, gusting ${Math.round(b.gust)}` : ""}${b.wdir != null ? ` from ${compass(b.wdir)}` : ""}`]);
+  if (b.wtmp != null) rows.push(["Water", `${b.wtmp.toFixed(1)} °C (${fdeg(b.wtmp)} °F) · ${suitFor(b.wtmp)[1]}`]);
+  if (b.atmp != null) rows.push(["Air", `${Math.round(b.atmp)} °C (${fdeg(b.atmp)} °F)`]);
+  return `<h2>Selected</h2><div class="actions"><span class="badge">Live buoy · NDBC ${esc(b.id)}</span></div>
+    <h3>${esc(b.name || "Buoy " + b.id)}</h3><div class="note" style="margin-top:-6px">${latlon(b.lat, b.lon, 2)} · reading ${ago < 90 ? ago + " min" : Math.round(ago / 60) + " h"} ago</div>
+    <div style="display:flex;align-items:baseline;gap:10px"><span class="bigpct">${m.h == null ? "–" : Math.round(m.h * FT) + " ft"}</span><span class="note">${m.t ? `at ${Math.round(m.t)} s ` : ""}${m.d ? "from " + m.d + " " : ""}· ${m.what}</span></div>
+    ${spark(b.hist || [])}<div class="note" style="margin-top:0">Last day: all waves in black, swell in colour.</div>
+    <dl class="facts">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+    <p class="note"><a href="https://www.ndbc.noaa.gov/station_page.php?station=${encodeURIComponent(b.id)}" target="_blank" rel="noopener">NDBC station page</a> · readings as of ${esc(buoysAt)}, refreshed hourly</p>`;
+}
 // A visit with nothing in the link opens on the forecast at the nearest marked break to the viewer
 // (the browser asks for the location), else at their first saved spot, else on the whole world.
 const FRESH = !location.hash.slice(1);
@@ -1599,6 +1664,13 @@ canvas.addEventListener("click", ev => {
   let best = -1, bestD = (12 / transform.k) ** 2;
   const wrapDx = dx => dx - worldW * Math.round(dx / worldW);
   pointXY.forEach((xy, i) => { if (!xy) return; const d = wrapDx(xy[0] - x) ** 2 + (xy[1] - y) ** 2; if (d < bestD) { bestD = d; best = i; } });
+  let buoy = null;
+  if (showBuoys) for (const b of liveBuoys) {  // a live buoy, if it's nearer than any spot
+    if (!b.xy) continue;
+    const d = wrapDx(b.xy[0] - x) ** 2 + (b.xy[1] - y) ** 2;
+    if (d < bestD) { bestD = d; buoy = b; }
+  }
+  if (buoy) { select({ type: "buoy", b: buoy }); return; }
   if (best >= 0) { select({ type: "point", i: best }); return; }
   if (transform.k >= 4) {  // a spot's name, where it's drawn beside the dot
     const sx = ev.clientX - r.left, sy = ev.clientY - r.top, forecasting = mapMode === "forecast" && FF;
@@ -1811,12 +1883,14 @@ function select(sel) { selected = sel; draw(); renderDetail(); saveState(); }
 function keyOf(sel) {
   if (!sel || sel.type === "land" || sel.type === "none") return "";
   if (sel.type === "point") return "p:" + meta.points[sel.i].name;
+  if (sel.type === "buoy") return "b:" + sel.b.id;
   const name = (sel.name || "").replace(/[:|]/g, " ");
   return `c:${sel.lat.toFixed(3)},${sel.lon.toFixed(3)}:${name}:${sel.osm ? "o" : sel.gap ? "g" : ""}`;
 }
 function fromKey(key) {
   if (!key) return null;
   if (key.startsWith("p:")) { const i = meta.points.findIndex(p => p.name === key.slice(2)); return i >= 0 ? { type: "point", i } : null; }
+  if (key.startsWith("b:")) { const b = liveBuoys.find(x => x.id === key.slice(2)); return b ? { type: "buoy", b } : null; }
   const [, ll, name = "", kind = ""] = key.match(/^c:([^:]+):?([^:]*):?([og]?)$/) || [];
   if (!ll) return null;
   const [lat, lon] = ll.split(",").map(Number);
@@ -2051,6 +2125,7 @@ function describe(sel) {  // what the panels show about a selection: title, badg
 function renderDetail() {
   const el = document.getElementById("detail");
   if (!selected || !pointPct) { el.innerHTML = EMPTY; return; }
+  if (selected.type === "buoy") { el.innerHTML = buoyHtml(selected.b); return; }
   if (selected.type === "land" || selected.type === "none") {
     el.innerHTML = `<h2>Selected</h2><h3>${latlon(selected.lat, selected.lon, 2)}</h3><p class="detail-empty">${selected.type === "land"
       ? "Inland, more than about 300 km from the sea or a large lake. Click nearer the coast."
@@ -2255,6 +2330,7 @@ async function localTools() {
     const pending = loadState();
     if (pending.hours.length && pending.hours.join() !== hoursOn.join()) await setHours(pending.hours, true);
     palette(); layout();
+    json("data/buoys_live.json").then(setupBuoys).catch(() => {});
     await applyYears();  // recomputes, over the whole record or the linked years
     applyView(pending.view, pending.sel);
     if (pending.land) setBasemap(pending.land);

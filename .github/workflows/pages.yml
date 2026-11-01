@@ -30,6 +30,8 @@ jobs:
           COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
           COPERNICUSMARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUSMARINE_SERVICE_PASSWORD }}
         run: uv run python -m surfmap forecast || echo "::warning::forecast failed; publishing the last committed one"
+      - name: Live buoys
+        run: uv run python -m surfmap buoys || echo "::warning::live buoys failed; publishing the last committed ones"
       # web/index.html has no document skeleton (the artifact host and `surfmap gui` add one);
       # wrap it the same way surfmap/gui.py does.
       - name: Assemble the site

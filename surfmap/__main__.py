@@ -23,6 +23,7 @@ def main():
     b = sub.add_parser("build", help="render one PDF page per month")
     b.add_argument("-o", "--output", default=str(config.ROOT / "predictive_surf_atlas.pdf"))
     sub.add_parser("discover", help="rewrite stretches.py: good coast far from the known breaks")
+    sub.add_parser("buoys", help="write web/data/buoys_live.json: the latest readings of NDBC's wave buoys")
     sub.add_parser("forecast", help="write web/data/forecast.json (the coming week at every marked break) and the map's swell chart")
     e = sub.add_parser("export", help="write web/data/ for the interactive atlas")
     e.add_argument("--res", type=int, default=2, help="ocean grid in degrees: 2 for the shareable page, 1 locally")
@@ -54,6 +55,9 @@ def main():
         if args.source in ("all", "osm"):  # OpenStreetMap surf spots, for the atlas
             from . import osm
             osm.fetch()
+    elif args.cmd == "buoys":
+        from . import livebuoys
+        livebuoys.live()
     elif args.cmd == "forecast":
         from . import forecast
         try:  # first: it needs no login or quota, and the breaks' forecast falls back on it
