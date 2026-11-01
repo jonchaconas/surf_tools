@@ -176,8 +176,7 @@ def _spot_counts(globe, details, basins):
                 continue
             i, j = g.cells[k]
             h, t, d, w = g.hs[:, i, j], g.tp[:, i, j], g.frm[:, i, j], g.ws[:, i, j]
-        good = rating.is_good(h, t, w) & rating.exposed(d, facing)
-        out[name] = (int(good.sum()), int(rating.has_sea(h, w).sum()))
+        out[name] = _tally(h, t, d, w, facing)
     return out
 
 
@@ -189,11 +188,23 @@ def _stretch_counts(globe):
         if abs(globe.lat[k] - clat) + abs(globe.lon[k] - clon) > 0.01:  # cell blank this month
             continue
         i, j = globe.cells[k]
-        h, t, d, w = globe.hs[:, i, j], globe.tp[:, i, j], globe.frm[:, i, j], globe.ws[:, i, j]
-        good = rating.is_good(h, t, w) & rating.exposed(d, facing)
-        out[name] = dict(good=int(good.sum()), n=int(rating.has_sea(h, w).sum()), hs=h[good],
-                         hb=rating.breaker_height(h[good], t[good]), tp=t[good], dir=d[good])
+        out[name] = _tally(globe.hs[:, i, j], globe.tp[:, i, j], globe.frm[:, i, j], globe.ws[:, i, j], facing)
     return out
+
+
+def _tally(h, t, d, w, facing):
+    """Good+ mornings with swell inside the facing's exposure window, and what those mornings looked like."""
+    good = rating.is_good(h, t, w) & rating.exposed(d, facing)
+    return dict(good=int(good.sum()), n=int(rating.has_sea(h, w).sum()), hs=h[good],
+                hb=rating.breaker_height(h[good], t[good]), tp=t[good], dir=d[good])
+
+
+def _merge(per):
+    """Add up _tally results over months: % good+ and the median good morning."""
+    good, n = sum(p["good"] for p in per), sum(p["n"] for p in per)
+    hs, hb, tp, dr = (np.concatenate([p[k] for p in per]) for k in ("hs", "hb", "tp", "dir"))
+    med = lambda a: float(np.median(a)) if len(a) else np.nan
+    return dict(pct=100 * good / max(n, 1), days=n, hs=med(hs), hb=med(hb), tp=med(tp), dir=_circmean(dr))
 
 
 def _circmean(deg):
@@ -273,9 +284,8 @@ class Period:
             per = [c.spots.get(name) for c in self.counts]
             if (basin and basin not in self.ready) or None in per:
                 continue
-            good, n = sum(p[0] for p in per), sum(p[1] for p in per)
-            rows.append(dict(name=name, region=region, lat=lat, lon=lon, basin=basin,
-                             pct=100 * good / max(n, 1), days=n, wind=wind.typical(name, self.months)))
+            rows.append(dict(name=name, region=region, lat=lat, lon=lon, basin=basin, **_merge(per),
+                             wind=wind.typical(name, self.months)))
         return sorted(rows, key=lambda r: -r["pct"])
 
     def stretches(self):
@@ -285,11 +295,7 @@ class Period:
             per = [c.stretches.get(name) for c in self.counts]
             if None in per:
                 continue
-            good, n = sum(p["good"] for p in per), sum(p["n"] for p in per)
-            hs, hb, tp, dr = (np.concatenate([p[k] for p in per]) for k in ("hs", "hb", "tp", "dir"))
-            med = lambda a: float(np.median(a)) if len(a) else np.nan
-            rows.append(dict(num=num, name=name, region=region, lat=lat, lon=lon, pct=100 * good / max(n, 1),
-                             hs=med(hs), hb=med(hb), tp=med(tp), dir=_circmean(dr),
+            rows.append(dict(num=num, name=name, region=region, lat=lat, lon=lon, **_merge(per),
                              wind=wind.typical(name, self.months)))
         return rows
 

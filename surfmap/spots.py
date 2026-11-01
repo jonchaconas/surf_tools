@@ -73,7 +73,8 @@ SPOTS = [
 ("Stoney Point","Lake Superior, Minnesota",46.930,-91.820,135),("Marquette","Lake Superior, Michigan",46.540,-87.380,30),
 ("Edgewater","Lake Erie, Ohio",41.490,-81.740,340),("Capo Mannu","Sardinia, Italy",40.030,8.380,280),
 ("Varazze","Liguria, Italy",44.355,8.580,180),("Barceloneta","Barcelona, Spain",41.378,2.192,120),
-("Falasarna","Crete, Greece",35.500,23.570,270),("Tel Aviv","Israel",32.080,34.765,270),
+("Falasarna","Crete, Greece",35.500,23.570,270),("Gaza","Palestine",31.520,34.430,295),
+("Beirut","Lebanon",33.890,35.470,270),
 ("Varna","Black Sea, Bulgaria",43.200,27.950,90),("Sochi","Black Sea, Russia",43.580,39.720,220),
 ("Aktau","Caspian Sea, Kazakhstan",43.650,51.150,250),("Baku","Caspian Sea, Azerbaijan",40.330,49.950,120),
 ]

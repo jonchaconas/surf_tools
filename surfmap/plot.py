@@ -265,22 +265,25 @@ def _ink_on(color):
     return "white" if 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.25 else INK
 
 
-def stretch_page(pdf):
-    """One row per discovered stretch: % good+ each month, year-round, and its typical good morning."""
-    from . import discover
+def _peak(vals):
+    """Best three consecutive calendar months: (label such as 'Jun\u2013Aug', mean %)."""
+    v = np.asarray(vals, float)
+    means = [np.nanmean(np.roll(v, -s)[:3]) for s in range(12)]
+    s = int(np.nanargmax(means))
+    return f"{calendar.month_abbr[s + 1]}\u2013{calendar.month_abbr[(s + 2) % 12 + 1]}", means[s]
 
-    rows = Period(tuple(range(1, 13)), "Year-round", "").stretches()
-    monthly = {m: {r["num"]: r["pct"] for r in Period((m,), "", "").stretches()} for m in range(1, 13)}
 
+WIND_NOTE = ("Morning wind = median speed and most common direction over all mornings of the period, "
+             "NOAA GFS 10 m wind just offshore, December 2022 onward.")
+
+
+def _breakout_page(pdf, title, subtitle, kind, rows, notes):
+    """Month-by-month table. Each row needs tag, name, region, months (12 % for Jan..Dec), pct, the
+    median good morning (hs, hb, tp, dir) and wind."""
     fig = plt.figure(figsize=(17, 11))
     fig.patch.set_facecolor("white")
-    fig.text(0.02, 0.965, "Under-the-radar stretches, month by month", fontsize=24, weight="bold", va="top")
-    fig.text(0.02, 0.925,
-             f"Coast where mornings are often good+ with swell aimed at the shore (≥{discover.MIN_YEAR}% "
-             f"year-round, or ≥{discover.MIN_PEAK}% over its best three months),\nat least {discover.FAR_KM} km "
-             f"from the well-known breaks and within {discover.TOWN_KM} km of a town of {discover.TOWN_POP:,}+. "
-             f"Numbers match the ◆ markers on the maps.", fontsize=11.5, color=INK_2, va="top",
-             linespacing=1.4)
+    fig.text(0.02, 0.965, title, fontsize=24, weight="bold", va="top")
+    fig.text(0.02, 0.925, subtitle, fontsize=11.5, color=INK_2, va="top", linespacing=1.4)
 
     ax = fig.add_axes([0.02, 0.075, 0.96, 0.8])
     ax.axis("off")
@@ -288,61 +291,107 @@ def stretch_page(pdf):
     ax.set_ylim(0, 1)
     h = 1 / (len(rows) + 1.5)
     x_month, w_month = 0.30, 0.03
-    x_year, x_worst = x_month + 12 * w_month + 0.01, x_month + 12 * w_month + 0.055
-    x_swell, x_wind = 0.77, 0.915
+    x_year, x_worst, x_best = 0.68, 0.725, 0.75
+    x_swell, x_wind = 0.815, 0.93
     y = 1 - h / 2
-    for x, label, ha in [(0.0, "#", "left"), (0.025, "Stretch", "left"), (0.17, "Country", "left"),
-                         (x_year + 0.02, "Year", "center"), (x_worst + 0.02, "Worst", "center"),
+    for x, label, ha in [(0.0, "#", "left"), (0.025, kind, "left"), (0.165, "Region", "left"),
+                         (x_year, "Year", "center"), (x_worst, "Worst", "center"), (x_best, "Best 3 months", "left"),
                          (x_swell, "Typical good morning", "left"), (x_wind, "Morning wind", "left")]:
         ax.text(x, y, label, fontsize=8.5, weight="bold", color=INK_2, ha=ha, va="center")
     for k, mon in enumerate("JFMAMJJASOND"):
         ax.text(x_month + (k + 0.5) * w_month, y, mon, fontsize=8.5, weight="bold", color=INK_2,
                 ha="center", va="center")
 
+    size = 8 if len(rows) > 36 else 8.5
     for r in rows:
         y -= h
-        ax.text(0.0, y, f"◆{r['num']}", fontsize=8.5, color=INK_3, va="center")
-        ax.text(0.025, y, r["name"], fontsize=8.5, weight="bold", va="center")
-        ax.text(0.17, y, r["region"], fontsize=8, color=INK_2, va="center")
-        vals = [monthly[m].get(r["num"], np.nan) for m in range(1, 13)]
-        for k, v in enumerate(vals):
+        ax.text(0.0, y, r["tag"], fontsize=size, color=INK_3, va="center")
+        ax.text(0.025, y, r["name"], fontsize=size, weight="bold", va="center")
+        ax.text(0.165, y, r["region"], fontsize=size - 0.5, color=INK_2, va="center")
+        for k, v in enumerate(r["months"]):
             color = CMAP(NORM(v)) if np.isfinite(v) else NODATA
             ax.add_patch(matplotlib.patches.Rectangle((x_month + k * w_month + 0.001, y - h * 0.42),
                                                       w_month - 0.002, h * 0.84, facecolor=color, linewidth=0))
-            ax.text(x_month + (k + 0.5) * w_month, y, f"{v:.0f}" if np.isfinite(v) else "–",
-                    fontsize=7.5, ha="center", va="center", color=_ink_on(color))
-        ax.text(x_year + 0.02, y, f"{r['pct']:.0f}%", fontsize=9, weight="bold", ha="center", va="center")
-        ax.text(x_worst + 0.02, y, f"{np.nanmin(vals):.0f}%", fontsize=8.5, ha="center", va="center")
-        ax.text(x_swell, y, f"{r['hs'] * rating.FT:.0f} ft @ {r['tp']:.0f} s {_compass(r['dir'], degrees=False)}"
-                f", surf ~{r['hb'] * rating.FT:.0f} ft", fontsize=8.5, color=INK_2, va="center")
-        ax.text(x_wind, y, _wind_text(r["wind"]) or "–", fontsize=8.5, color=INK_2, va="center")
+            ax.text(x_month + (k + 0.5) * w_month, y, f"{v:.0f}" if np.isfinite(v) else "\u2013",
+                    fontsize=size - 1, ha="center", va="center", color=_ink_on(color))
+        best, best_pct = _peak(r["months"])
+        ax.text(x_year, y, f"{r['pct']:.0f}%", fontsize=size + 0.5, weight="bold", ha="center", va="center")
+        ax.text(x_worst, y, f"{np.nanmin(r['months']):.0f}%", fontsize=size, ha="center", va="center")
+        ax.text(x_best, y, f"{best} {best_pct:.0f}%", fontsize=size, va="center")
+        good = (f"{r['hs'] * rating.FT:.0f} ft @ {r['tp']:.0f} s {_compass(r['dir'], degrees=False)}, "
+                f"surf ~{r['hb'] * rating.FT:.0f} ft") if np.isfinite(r["hs"]) else "\u2013"
+        ax.text(x_swell, y, good, fontsize=size, color=INK_2, va="center")
+        ax.text(x_wind, y, _wind_text(r["wind"]) or "\u2013", fontsize=size, color=INK_2, va="center")
 
     fig.text(0.02, 0.06, "Month cells use the map colours (% of mornings good+). Typical good morning = medians "
-             "over that stretch's good+ mornings: swell height @ peak period and the direction it comes from, and "
-             "estimated breaking surf (Komar–Gaughan).\nMorning wind = median speed and most common direction "
-             "over all mornings of the period, NOAA GFS 10 m wind just offshore, December 2022 onward.",
-             fontsize=7.5, color=INK_2, va="top", linespacing=1.5)
-    fig.text(0.02, 0.026, "Each stretch is read from one WW3 cell 50–120 km offshore. The rule has no wind, "
-             "which flatters cold, steady coasts (Chile, Peru, Namibia) and storm coasts (southern Chile, New "
-             "Zealand's West Coast); check local wind and access before booking a trip.",
-             fontsize=7.5, color=INK_3, va="top")
+             "over the good+ mornings: swell height @ peak period and the direction it comes from, and estimated "
+             "breaking surf (Komar\u2013Gaughan).\n" + WIND_NOTE, fontsize=7.5, color=INK_2, va="top",
+             linespacing=1.5)
+    fig.text(0.02, 0.026, notes, fontsize=7.5, color=INK_3, va="top")
     pdf.savefig(fig, dpi=220)
     return fig
 
 
+def _monthly(kind, key):
+    """{key value: [% good+ for Jan..Dec]} for 'spots' or 'stretches'."""
+    out = {}
+    for m in range(1, 13):
+        for r in getattr(Period((m,), "", ""), kind)():
+            out.setdefault(r[key], [np.nan] * 12)[m - 1] = r["pct"]
+    return out
+
+
+def stretch_page(pdf):
+    """One row per discovered stretch, in stretches.py order."""
+    from . import discover
+
+    monthly = _monthly("stretches", "num")
+    rows = [dict(r, tag=f"\u25c6{r['num']}", months=monthly[r["num"]])
+            for r in Period(tuple(range(1, 13)), "", "").stretches()]
+    subtitle = (f"Coast where mornings are often good+ with swell aimed at the shore (\u2265{discover.MIN_YEAR}% "
+                f"year-round, or \u2265{discover.MIN_PEAK}% over its best three months),\nat least {discover.FAR_KM} "
+                f"km from the well-known breaks and within {discover.TOWN_KM} km of a town of "
+                f"{discover.TOWN_POP:,}+. Numbers match the \u25c6 markers on the maps.")
+    notes = ("Each stretch is read from one WW3 cell 50\u2013120 km offshore. The rule has no wind, which flatters "
+             "cold, steady coasts (Chile, Peru, Namibia) and storm coasts (southern Chile, New Zealand's West "
+             "Coast); check local wind and access before booking a trip.")
+    return _breakout_page(pdf, "Under-the-radar stretches, month by month", subtitle, "Stretch", rows, notes)
+
+
+POPULAR_ROWS = 40
+
+
+def spot_page(pdf):
+    """The named ocean breaks with the strongest three-month season, one per 100 miles."""
+    monthly = _monthly("spots", "name")
+    rows = [dict(r, months=monthly[r["name"]]) for r in Period(tuple(range(1, 13)), "", "").spots()
+            if r["basin"] is None and r["name"] in monthly]
+    rows = _distinct(sorted(rows, key=lambda r: -_peak(r["months"])[1]), POPULAR_ROWS)
+    for i, r in enumerate(rows, 1):
+        r["tag"] = str(i)
+    subtitle = (f"The {len(rows)} well-known breaks with the strongest three-month season (best one per 100 miles "
+                f"of coast), ranked by that season.\nBreaks in the enclosed seas are on the map insets.")
+    notes = ("Each break is read from its nearest seaward model cell (0.5\u00b0 in East and Southeast Asia, 1\u00b0 "
+             "elsewhere) with swell inside its exposure window. The rule has no wind; local reefs, points and "
+             "sheltering are not modelled.")
+    return _breakout_page(pdf, "Popular breaks, month by month", subtitle, "Break", rows, notes)
+
+
 def build(output, preview_dir=None):
-    """Summary pages (config.SUMMARIES), the stretches breakout, then one page per month in config.MONTHS."""
+    """Summary pages, the two month-by-month breakouts, then one page per month in config.MONTHS."""
     land = _land()
-    breakout = len(config.SUMMARIES) + 1
-    periods = [(title, table, months) for title, table, months in config.SUMMARIES]
-    periods += [(calendar.month_name[m], f"Best named breaks in {calendar.month_name[m]}", (m,))
-                for m in config.MONTHS]
+    stretches_page = len(config.SUMMARIES) + 1
+
+    def maps(title, table, months):
+        return lambda pdf: page(pdf, Period(months, title, table), land, stretches_page)
+
+    pages = [(title, maps(title, table, months)) for title, table, months in config.SUMMARIES]
+    pages += [("Under-the-radar stretches", stretch_page), ("Popular breaks", spot_page)]
+    pages += [(calendar.month_name[m], maps(calendar.month_name[m], f"Best named breaks in {calendar.month_name[m]}", (m,)))
+              for m in config.MONTHS]
     with PdfPages(output) as pdf:
-        for i, (title, table, months) in enumerate(periods, 1):
-            if i == breakout:
-                _save(stretch_page(pdf), preview_dir, i, "Under-the-radar stretches")
-            n = i + (i >= breakout)
-            _save(page(pdf, Period(months, title, table), land, breakout), preview_dir, n, title)
+        for n, (title, render) in enumerate(pages, 1):
+            _save(render(pdf), preview_dir, n, title)
     print(f"wrote {output}")
 
 
