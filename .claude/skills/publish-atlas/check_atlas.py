@@ -13,7 +13,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-URL = "http://127.0.0.1:8765/"
+URL = "http://127.0.0.1:8765/#m=year"  # a link with state: a bare one opens on the forecast near the viewer
 HERE = Path(__file__).parent
 READY = "document.getElementById('loading').hidden === true"
 

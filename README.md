@@ -127,6 +127,9 @@ Breakout tables are listed by year-round consistency.
   [`android/predictive-surf-atlas.apk`](android/predictive-surf-atlas.apk): the same page in a
   WebView, built by [`.github/workflows/android.yml`](.github/workflows/android.yml) whenever
   `android/` changes. Allow installs from your browser to sideload it.
+- **Opening view:** a bare link opens on the forecast at the marked break nearest you (the browser
+  asks for your location), else at your first saved spot. Clicking a forecast square moves the
+  forecast map to that moment.
 - **Reset:** the button at the top returns to the default view and settings (saved spots stay).
 
 To make the map work in a browser, each month's mornings for the grid cells are pre-counted into
