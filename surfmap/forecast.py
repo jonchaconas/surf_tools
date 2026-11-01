@@ -169,7 +169,7 @@ def _wind(pts):
 
 def build():
     pts = json.loads(META.read_text())["points"]
-    waves, sources = {}, {"cdip": 0, "copernicus": 0, "open-meteo": 0}
+    waves, sources = {}, {"cdip": 0, "copernicus": 0, "open-meteo": 0, "swell chart": 0}
 
     def one(p):
         try:
@@ -187,9 +187,23 @@ def build():
                 sources[src] += 1
     rest = [p for p in pts if key(p) not in waves]
     if rest:
-        waves.update(_marine_fallback(rest))
-        sources["open-meteo"] = sum(key(p) in waves for p in rest)
-    wind = _wind(pts)
+        try:
+            waves.update(_marine_fallback(rest))
+            sources["open-meteo"] = sum(key(p) in waves for p in rest)
+        except Exception as e:  # out of quota: the swell chart below
+            print(f"  Open-Meteo waves failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
+    try:
+        wind = _wind(pts)
+    except Exception as e:
+        print(f"  Open-Meteo wind failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
+        wind = {}
+    if MAP_JSON.exists() and (len(waves) < len(pts) or len(wind) < len(pts)):
+        chart_waves, chart_wind = _from_chart(pts)
+        for p in pts:
+            if key(p) not in waves and key(p) in chart_waves:
+                waves[key(p)] = chart_waves[key(p)]
+                sources["swell chart"] += 1
+            wind.setdefault(key(p), chart_wind.get(key(p), {}))
     try:
         temps = water(pts)
     except Exception as e:  # the page falls back on the monthly means
@@ -323,3 +337,32 @@ def water(pts):
         out[key(p)] = [round(float(box[a, b]), 1), str(g.time.values[0])[:10], src]
     print(f"  water temperature at {len(out)} breaks", flush=True)
     return out
+
+
+def _from_chart(pts):
+    """Waves and wind at each break from the swell chart (chart(), run first): ({key: wave rows},
+    {key: wind rows}). All the waves stand in for the swell, from the nearest 1° cell with waves
+    within 1.5°; the fallback when Open-Meteo is out of quota."""
+    import base64
+    import gzip
+
+    m = json.loads(MAP_JSON.read_text())
+    at, step = {n: k for k, (n, _) in enumerate(m["fields"])}, dict(m["fields"])
+    cube = np.frombuffer(gzip.decompress(base64.b64decode(MAP_DATA.read_text())), np.uint8).reshape(len(m["times"]), len(at), m["nlat"], m["nlon"])
+    times = np.array([np.datetime64(t.rstrip("Z")) for t in m["times"]])
+    lat, lon = m["lat0"] + m["step"] * np.arange(m["nlat"]), m["lon0"] + m["step"] * np.arange(m["nlon"])
+    hours = (times[1] - times[0]) / np.timedelta64(1, "h")
+    wet = (cube[:, at["hs"]] != 255).any(axis=0)
+    field = lambda n, a, b: np.where(cube[:, at[n], a, b] == 255, np.nan, cube[:, at[n], a, b] * step[n])
+    waves, wind = {}, {}
+    for p in pts:
+        d = np.hypot(*np.meshgrid((lon - p["lon"] + 180) % 360 - 180, lat - p["lat"])[::-1] * np.array([1, np.cos(np.radians(p["lat"]))])[:, None, None])
+        a, b = np.unravel_index(np.argmin(d), d.shape)
+        wind[key(p)] = _rows(times, p["lon"], [field("kt", a, b), field("wind_from", a, b), np.full(len(times), np.nan)], hours)
+        dw = np.where(wet, d, np.inf)
+        a, b = np.unravel_index(np.argmin(dw), dw.shape)
+        if dw[a, b] <= 1.5:
+            hs, tp, dr = field("hs", a, b), field("tp", a, b), field("dir", a, b)
+            nan = np.full(len(times), np.nan)
+            waves[key(p)] = _rows(times, p["lon"], [hs, tp, dr, nan, nan, nan, hs, tp, dr], hours)
+    return waves, wind

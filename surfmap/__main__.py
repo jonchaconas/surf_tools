@@ -56,8 +56,11 @@ def main():
             osm.fetch()
     elif args.cmd == "forecast":
         from . import forecast
+        try:  # first: it needs no login or quota, and the breaks' forecast falls back on it
+            forecast.chart()
+        except Exception as e:
+            print(f"swell chart failed: {type(e).__name__}: {str(e)[:200]}", flush=True)
         forecast.build()
-        forecast.chart()
     elif args.cmd == "discover":
         from . import discover
         discover.write(discover.find())
