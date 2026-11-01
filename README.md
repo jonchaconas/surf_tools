@@ -75,7 +75,9 @@ Run it locally, at 1° resolution, with buttons to download new data and rebuild
 uv run python -m surfmap gui
 ```
 
-`web/` is a static site, so it can also be hosted as is, for example on GitHub Pages.
+`web/` is a static site. [`.github/workflows/pages.yml`](.github/workflows/pages.yml) publishes it to
+**https://jonchaconas.github.io/surf_tools/** whenever `web/` changes on `main`. This needs a one-time
+setting: Settings → Pages → Source: GitHub Actions.
 
 ## What counts as good
 

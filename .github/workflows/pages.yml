@@ -1,0 +1,44 @@
+# Publishes the Surf Climate Atlas (web/) to GitHub Pages whenever it changes on main.
+# One-time setup: repo Settings → Pages → Build and deployment → Source: GitHub Actions.
+name: Atlas on GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      # web/index.html has no document skeleton (the artifact host and `surfmap gui` add one);
+      # wrap it the same way surfmap/gui.py does.
+      - name: Assemble the site
+        run: |
+          mkdir -p _site
+          cp -r web/data _site/data
+          {
+            printf '%s' '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            printf '%s' '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body>'
+            cat web/index.html
+          } > _site/index.html
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
