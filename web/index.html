@@ -120,6 +120,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
         <div><strong id="hintperiod">Year-round</strong> · share of mornings that are good by your criteria <span id="yearstatus"></span></div>
         <div class="legend" id="legend"></div>
         <div class="legend-labels" id="legendlabels"></div>
+        <label class="row" for="minpct" style="margin-top:6px">Show spots good at least <span class="val" id="minpctv"></span><input type="range" id="minpct" min="0" max="80" step="5" value="10"></label>
         <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast &nbsp; ✶ uncharted &nbsp; · surf spot (OSM) &nbsp; <span class="swatch" style="background:var(--nodata)"></span>no data · click anywhere</div>
       </div>
       <div class="loading" id="loading">Loading the model data…</div>
@@ -634,20 +635,22 @@ function draw() {
     ctx.fillStyle = css("--land"); ctx.fill();
     ctx.strokeStyle = css("--coast"); ctx.lineWidth = 0.6 / k; ctx.stroke();
   }
-  if (osm.length && k >= 2.5) {  // OpenStreetMap surf spots, once there's room
-    ctx.fillStyle = css("--ink"); ctx.globalAlpha = 0.7;
-    for (const o of osm) { const xy = o.xy; if (!xy) continue; ctx.beginPath(); ctx.arc(xy[0], xy[1], 1.8 / k, 0, 2 * Math.PI); ctx.fill(); }
-    ctx.globalAlpha = 1;
+  if (osm.length && k >= 2.5) {  // OpenStreetMap surf spots, once there's room, coloured by their beach's rating
+    ctx.strokeStyle = css("--ink"); ctx.lineWidth = 0.6 / k;
+    for (const o of osm) {
+      if (!o.xy || !shown(osmPct(o))) continue;
+      ctx.beginPath(); ctx.arc(o.xy[0], o.xy[1], 2.4 / k, 0, 2 * Math.PI); ctx.fillStyle = colorFor(osmPct(o)) || css("--ink"); ctx.fill(); ctx.stroke();
+    }
     if (k >= 12) {
       ctx.font = `400 ${10 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = css("--muted");
       ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
-      for (const o of osm) { if (!o.xy) continue; ctx.strokeText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); ctx.fillText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); }
+      for (const o of osm) { if (!o.xy || !shown(osmPct(o))) continue; ctx.strokeText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); ctx.fillText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); }
     }
   }
   if (document.getElementById("unch").checked) {  // uncharted picks as stars
     const r = Math.max(4, Math.min(8, 3.5 + k * 0.6)) / k;
     uncharted.slice(0, 10).forEach((u, n) => {
-      const xy = projection([u.lon, u.lat]); if (!xy) return;
+      const xy = projection([u.lon, u.lat]); if (!xy || !shown(u.v)) return;
       ctx.beginPath();
       for (let q = 0; q < 10; q++) { const a = (q * Math.PI) / 5 - Math.PI / 2, rr = q % 2 ? r * 0.45 : r; ctx.lineTo(xy[0] + rr * Math.cos(a), xy[1] + rr * Math.sin(a)); }
       ctx.closePath(); ctx.fillStyle = colorFor(u.v); ctx.fill(); ctx.lineWidth = 1.2 / k; ctx.strokeStyle = css("--ink"); ctx.stroke();
@@ -656,7 +659,7 @@ function draw() {
   if (pointPct) {
     const ink = css("--ink"), r = Math.max(2.6, Math.min(6, 2.2 + k * 0.5)) / k;
     meta.points.forEach((p, i) => {
-      const xy = pointXY[i]; if (!xy) return;
+      const xy = pointXY[i]; if (!xy || !shown(pointPct[i])) return;
       ctx.beginPath();
       if (p.kind === "stretch") { ctx.moveTo(xy[0], xy[1] - r * 1.3); ctx.lineTo(xy[0] + r * 1.3, xy[1]); ctx.lineTo(xy[0], xy[1] + r * 1.3); ctx.lineTo(xy[0] - r * 1.3, xy[1]); ctx.closePath(); }
       else ctx.arc(xy[0], xy[1], p.kind === "coast" ? r * 0.85 : r, 0, 2 * Math.PI);
@@ -666,7 +669,7 @@ function draw() {
     if (k >= 4) {  // names once zoomed in enough to have room
       ctx.font = `500 ${11 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = ink;
       ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
-      meta.points.forEach((p, i) => { const xy = pointXY[i]; if (!xy) return;
+      meta.points.forEach((p, i) => { const xy = pointXY[i]; if (!xy || !shown(pointPct[i])) return;
         ctx.strokeText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); ctx.fillText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); });
     }
   }
@@ -706,11 +709,11 @@ canvas.addEventListener("click", ev => {
   const r = canvas.getBoundingClientRect();
   const [x, y] = transform.invert([ev.clientX - r.left, ev.clientY - r.top]);
   let best = -1, bestD = (12 / transform.k) ** 2;
-  pointXY.forEach((xy, i) => { if (!xy) return; const d = (xy[0] - x) ** 2 + (xy[1] - y) ** 2; if (d < bestD) { bestD = d; best = i; } });
+  pointXY.forEach((xy, i) => { if (!xy || !shown(pointPct[i])) return; const d = (xy[0] - x) ** 2 + (xy[1] - y) ** 2; if (d < bestD) { bestD = d; best = i; } });
   if (best >= 0) { select({ type: "point", i: best }); return; }
   if (transform.k >= 2.5) {
     let o = null, od = (8 / transform.k) ** 2;
-    for (const s of osm) { if (!s.xy) continue; const d = (s.xy[0] - x) ** 2 + (s.xy[1] - y) ** 2; if (d < od) { od = d; o = s; } }
+    for (const s of osm) { if (!s.xy || !shown(osmPct(s))) continue; const d = (s.xy[0] - x) ** 2 + (s.xy[1] - y) ** 2; if (d < od) { od = d; o = s; } }
     if (o) { select({ ...nearestBeach(o.lon, o.lat), name: o.name, osm: true, lat: o.lat, lon: o.lon }); return; }
   }
   const lon = lonAt(x), lat = latAt(y);
@@ -819,18 +822,31 @@ function bars(shares) {
       `<text class="v" x="${m * bw + bw / 2}" y="${y(v) - 3}" text-anchor="middle">${isFinite(v) ? Math.round(v) : ""}</text>` +
       `<text x="${m * bw + bw / 2}" y="${h - 3}" text-anchor="middle">${MONTHS[m][0]}</text>`).join("") + `</svg>`;
 }
-let shore;  // coastal pixels right at the shoreline, for snapping clicks to the nearest beach
+let shore;  // coastal pixels right at the shoreline (index, lat, lon), for snapping to the nearest beach
 function nearestBeach(lon, lat) {
-  if (!shore) shore = R.pix.reduce((a, q, c) => (R.alpha[c] === 255 && a.push(c), a), []);
+  if (!shore) {
+    const ids = R.pix.reduce((a, q, c) => (R.alpha[c] === 255 && a.push(c), a), []);
+    shore = { ids, lat: Float32Array.from(ids, c => pixelLatLon(R.pix[c]).lat), lon: Float32Array.from(ids, c => pixelLatLon(R.pix[c]).lon) };
+  }
   const cl = Math.cos((lat * Math.PI) / 180);
   let best = -1, bd = Infinity;
-  for (const c of shore) {
-    const at = pixelLatLon(R.pix[c]), dx = ((((at.lon - lon) % 360) + 540) % 360 - 180) * cl, dy = at.lat - lat, d = dx * dx + dy * dy;
-    if (d < bd) { bd = d; best = c; }
+  for (let n = 0; n < shore.ids.length; n++) {
+    const dx = ((((shore.lon[n] - lon) % 360) + 540) % 360 - 180) * cl, dy = shore.lat[n] - lat, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = shore.ids[n]; }
   }
   const q = R.pix[best], at = pixelLatLon(q);
   return { type: "coast", c: best, under: seaWeights(q, at.lon, at.lat), ...at, snappedKm: km({ lat, lon }, at) };
 }
+let minPct = 10;  // the map's "show spots good at least" filter: hides the red and orange spots to start
+const shown = v => minPct === 0 || v >= minPct;
+function osmPct(o) {  // an OpenStreetMap spot rates as its nearest beach does on the map
+  if (o.c === undefined) o.c = nearestBeach(o.lon, o.lat).c;
+  return F[R.pix[o.c]];
+}
+document.getElementById("minpct").addEventListener("input", e => {
+  minPct = +e.target.value; document.getElementById("minpctv").textContent = minPct ? `${minPct}%` : "any"; draw();
+});
+document.getElementById("minpctv").textContent = `${minPct}%`;
 function nearestPlace(lat, lon) {  // the nearest Natural Earth town: { name, region, country, km }
   let best = null, bd = Infinity;
   const cl = Math.cos((lat * Math.PI) / 180);
