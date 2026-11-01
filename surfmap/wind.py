@@ -52,6 +52,9 @@ def _path(key):
 
 def _url(key):
     la, lo, h = key
+    # This dataset's latitude axis is mirrored: asking for 39.5 returns 39.5S. Checked against
+    # ERA5 (Open-Meteo archive) on matching mornings, so request the opposite sign.
+    la = -la
     t0 = START.replace(hour=h) + timedelta(days=0 if h >= START.hour else 1)
     last = datetime.combine(date.today() - timedelta(days=1), datetime.min.time()).replace(hour=h)
     t1 = t0 + timedelta(days=(last - t0).days // EVERY_DAYS * EVERY_DAYS)
@@ -62,8 +65,11 @@ def _url(key):
 
 @lru_cache
 def _keys():
-    """Point name -> download key, for every named break and stretch."""
-    return {name: _key(lat, lon, facing) for name, _, lat, lon, facing, *_ in SPOTS + STRETCHES}
+    """Point name -> download key, for every named break, stretch and regional coast."""
+    from .regions import REGIONS
+
+    coasts = [c for spec in REGIONS.values() for c in spec["coasts"]]
+    return {name: _key(lat, lon, facing) for name, _, lat, lon, facing, *_ in SPOTS + STRETCHES + coasts}
 
 
 def fetch(workers=4):

@@ -9,7 +9,7 @@ SPOTS = [
 ("Pipeline","Oahu, Hawaii",21.665,-158.053,320),("Sunset Beach","Oahu, Hawaii",21.679,-158.041,320),
 ("Hanalei Bay","Kauai, Hawaii",22.215,-159.50,0),("Honolua Bay","Maui, Hawaii",21.015,-156.638,340),
 ("Waikiki","Oahu, Hawaii",21.270,-157.830,190),
-("Mavericks","California",37.492,-122.500,250),("Ocean Beach SF","California",37.760,-122.512,270),
+("Montara","California",37.545,-122.516,265),("Ocean Beach SF","California",37.760,-122.512,270),
 ("Steamer Lane","California",36.951,-122.026,220),("Rincon","California",34.374,-119.477,230),
 ("Malibu","California",34.035,-118.678,190),("Huntington Beach","California",33.655,-118.004,220),
 ("Trestles","California",33.382,-117.589,220),("Black's Beach","California",32.889,-117.253,270),

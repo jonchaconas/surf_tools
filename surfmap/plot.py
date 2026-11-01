@@ -377,8 +377,116 @@ def spot_page(pdf):
     return _breakout_page(pdf, "Popular breaks, month by month", subtitle, "Break", rows, notes)
 
 
+def region_page(pdf, region, land):
+    """A regional close-up: coasts on a map, the region's surfable season, and a month-by-month table."""
+    from . import regions
+    from .analysis import month_counts
+
+    spec = regions.REGIONS[region]
+    tp_ratio = next((r for r in (month_counts(m).tp_ratio for m in range(1, 13)) if r), 1.29)
+    rows = regions.summary(region, tp_ratio)
+
+    fig = plt.figure(figsize=(17, 11))
+    fig.patch.set_facecolor("white")
+    fig.text(0.02, 0.965, f"{region}: when and where it's surfable", fontsize=24, weight="bold", va="top")
+    fig.text(0.02, 0.925,
+             f"Surfable windswell = total wave height {regions.MIN_HS * rating.FT:.0f}–"
+             f"{regions.MAX_HS * rating.FT:.0f} ft ({regions.MIN_HS:g}–{regions.MAX_HS:g} m) with mean period "
+             f"≥ {regions.MIN_PERIOD:g} s, arriving within {config.EXPOSURE}° of the shore's facing, on the "
+             f"~{config.LOCAL_HOUR:02d}:00 sample.\nEnclosed seas rarely see groundswell, so this regional standard sits "
+             f"alongside ocean good+, the open-ocean standard used on the other pages.",
+             fontsize=11.5, color=INK_2, va="top", linespacing=1.4)
+
+    lon0, lon1, lat0, lat1 = spec["extent"]
+    ax = fig.add_axes([0.02, 0.4, 0.44, 0.47], projection=ccrs.Mercator(central_longitude=(lon0 + lon1) / 2))
+    ax.set_extent(spec["extent"], crs=PC)
+    ax.set_facecolor("#f4f7fa")
+    ax.add_feature(land, facecolor=LAND, edgecolor="none", zorder=2, rasterized=True)
+    ax.add_feature(cfeature.COASTLINE.with_scale("50m"), edgecolor=COAST, linewidth=0.4, zorder=3)
+    ax.add_feature(cfeature.LAKES.with_scale("50m"), facecolor="none", edgecolor=COAST, linewidth=0.4, zorder=3)
+    ax.spines["geo"].set_edgecolor(COAST)
+    for i, r in enumerate(rows, 1):
+        color = CMAP(NORM(r["pct"])) if r["complete"] else NODATA
+        ax.scatter([r["lon"]], [r["lat"]], s=170, c=[color], edgecolors=INK, linewidths=0.8, transform=PC, zorder=5)
+        ax.text(r["lon"], r["lat"], str(i), fontsize=7.5, weight="bold", ha="center", va="center",
+                color=_ink_on(color), transform=PC, zorder=6)
+        # Label on the seaward side, so neighbouring coasts don't collide.
+        dx, dy = np.sin(np.radians(r["facing"])), np.cos(np.radians(r["facing"]))
+        ax.text(r["lon"] + dx * 0.035 * (lon1 - lon0), r["lat"] + dy * 0.035 * (lat1 - lat0), r["name"],
+                fontsize=8, ha="left" if dx > 0.35 else "right" if dx < -0.35 else "center",
+                va="bottom" if dy > 0.35 else "top" if dy < -0.35 else "center",
+                transform=PC, zorder=6, path_effects=HALO)
+
+    months = np.array([r["months"] for r in rows])
+    avg = [np.mean(months[:, k]) if np.isfinite(months[:, k]).all() else np.nan for k in range(12)]
+    bx = fig.add_axes([0.53, 0.47, 0.44, 0.36])
+    for k, v in enumerate(avg):
+        if np.isfinite(v):
+            bx.bar(k, v, width=0.72, color=CMAP(NORM(v)), zorder=2)
+            bx.text(k, v + 0.6, f"{v:.0f}%", ha="center", va="bottom", fontsize=8.5, color=INK)
+        else:
+            bx.text(k, 0.5, "pending", ha="center", va="bottom", fontsize=7, color=INK_3, rotation=90)
+    bx.set_xticks(range(12), [calendar.month_abbr[m] for m in range(1, 13)])
+    bx.set_title("Average of these coasts: % of mornings with surfable windswell", fontsize=10.5,
+                 weight="bold", loc="left", pad=8)
+    bx.spines[["top", "right", "left"]].set_visible(False)
+    bx.spines["bottom"].set_color(COAST)
+    bx.tick_params(axis="y", left=False, labelleft=False)
+    bx.tick_params(axis="x", length=0, labelsize=9, colors=INK_2)
+    bx.set_ylim(0, max(10, np.nanmax(avg) * 1.18) if np.isfinite(avg).any() else 10)
+
+    tx = fig.add_axes([0.02, 0.07, 0.96, 0.29])
+    tx.axis("off")
+    tx.set_xlim(0, 1)
+    tx.set_ylim(0, 1)
+    h = 1 / (len(rows) + 1.3)
+    x_month, w_month = 0.25, 0.03
+    x_year, x_best, x_ocean, x_good, x_wind = 0.635, 0.665, 0.79, 0.825, 0.93
+    y = 1 - h / 2
+    for x, label, ha in [(0.0, "#", "left"), (0.022, "Coast", "left"), (0.12, "Area", "left"),
+                         (x_year, "Year", "center"), (x_best, "Best 3 months", "left"),
+                         (x_ocean, "Ocean good+", "center"), (x_good, "Typical surfable morning", "left"),
+                         (x_wind, "Morning wind", "left")]:
+        tx.text(x, y, label, fontsize=8.5, weight="bold", color=INK_2, ha=ha, va="center")
+    for k, mon in enumerate("JFMAMJJASOND"):
+        tx.text(x_month + (k + 0.5) * w_month, y, mon, fontsize=8.5, weight="bold", color=INK_2,
+                ha="center", va="center")
+    for i, r in enumerate(rows, 1):
+        y -= h
+        tx.text(0.0, y, str(i), fontsize=8.5, color=INK_3, va="center")
+        tx.text(0.022, y, r["name"], fontsize=8.5, weight="bold", va="center")
+        tx.text(0.12, y, r["region"], fontsize=8, color=INK_2, va="center")
+        for k, v in enumerate(r["months"]):
+            color = CMAP(NORM(v)) if np.isfinite(v) else NODATA
+            tx.add_patch(matplotlib.patches.Rectangle((x_month + k * w_month + 0.001, y - h * 0.42),
+                                                      w_month - 0.002, h * 0.84, facecolor=color, linewidth=0))
+            tx.text(x_month + (k + 0.5) * w_month, y, f"{v:.0f}" if np.isfinite(v) else "–",
+                    fontsize=7.5, ha="center", va="center", color=_ink_on(color))
+        if r["complete"]:
+            best, best_pct = _peak(r["months"])
+            tx.text(x_year, y, f"{r['pct']:.0f}%", fontsize=9, weight="bold", ha="center", va="center")
+            tx.text(x_best, y, f"{best} {best_pct:.0f}%", fontsize=8.5, va="center")
+            tx.text(x_ocean, y, f"{r['ocean']:.0f}%", fontsize=8.5, ha="center", va="center")
+        else:
+            tx.text(x_year, y, "pending", fontsize=8, color=INK_3, ha="center", va="center")
+        good = (f"{r['hs'] * rating.FT:.0f} ft @ {r['tp']:.0f} s {_compass(r['dir'], degrees=False)}"
+                if np.isfinite(r["hs"]) else "–")
+        tx.text(x_good, y, good, fontsize=8.5, color=INK_2, va="center")
+        tx.text(x_wind, y, _wind_text(r["wind"]) or "–", fontsize=8.5, color=INK_2, va="center")
+
+    pending = "" if all(r["complete"] for r in rows) else \
+        " Months marked – are still downloading (Open-Meteo free-tier quota)."
+    fig.text(0.02, 0.05, "Open-Meteo Marine (Météo-France MFWAM) at each coast's model cell, a few km "
+             "offshore. Typical surfable morning = medians over surfable mornings: total wave height @ mean period "
+             "and the direction waves come from." + pending, fontsize=7.5, color=INK_2, va="top")
+    fig.text(0.02, 0.033, WIND_NOTE + " Neither standard uses wind; check it before paddling out.",
+             fontsize=7.5, color=INK_3, va="top")
+    pdf.savefig(fig, dpi=220)
+    return fig
+
+
 def build(output, preview_dir=None):
-    """Summary pages, the two month-by-month breakouts, then one page per month in config.MONTHS."""
+    """Summary pages, the breakouts and regional pages, then one page per month in config.MONTHS."""
     land = _land()
     stretches_page = len(config.SUMMARIES) + 1
 
@@ -387,6 +495,8 @@ def build(output, preview_dir=None):
 
     pages = [(title, maps(title, table, months)) for title, table, months in config.SUMMARIES]
     pages += [("Under-the-radar stretches", stretch_page), ("Popular breaks", spot_page)]
+    from .regions import REGIONS
+    pages += [(region, lambda pdf, region=region: region_page(pdf, region, land)) for region in REGIONS]
     pages += [(calendar.month_name[m], maps(calendar.month_name[m], f"Best named breaks in {calendar.month_name[m]}", (m,)))
               for m in config.MONTHS]
     with PdfPages(output) as pdf:

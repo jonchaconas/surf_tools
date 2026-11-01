@@ -149,6 +149,16 @@ def fetch():
                     print(f"  {path.name} ({total:.0f} weighted calls so far)", flush=True)
 
 
+def morning(row, keep):
+    """One location's hourly response cut to its ~config.LOCAL_HOUR sample on the days in keep."""
+    lon = row["requested"][1]
+    t = np.array(row["hourly"]["time"], dtype="datetime64[h]")
+    day = t.astype("datetime64[D]")
+    h = round(config.LOCAL_HOUR - lon / 15) % 24
+    sel = ((t - day).astype(int) == h) & np.isin(day, keep)
+    return {v: np.array(row["hourly"][v], dtype=float)[sel] for v in HOURLY}
+
+
 def load(month):
     """Morning samples per basin: {name: dict(lat, lon, hs, tp, dir, ws)}, arrays shaped (point, day).
 
@@ -164,13 +174,7 @@ def load(month):
         series = {}
         for path in sorted(OUT.glob(f"{name}_*-{month:02d}_*.json")):
             for row in json.loads(path.read_text()):
-                lat, lon = row["requested"]
-                t = np.array(row["hourly"]["time"], dtype="datetime64[h]")
-                day = t.astype("datetime64[D]")
-                h = round(config.LOCAL_HOUR - lon / 15) % 24
-                sel = ((t - day).astype(int) == h) & np.isin(day, keep)
-                series.setdefault((lat, lon), []).append(
-                    {v: np.array(row["hourly"][v], dtype=float)[sel] for v in HOURLY})
+                series.setdefault(tuple(row["requested"]), []).append(morning(row, keep))
         if series:
             pts = list(series)
             raw[name] = dict(lat=np.array([p[0] for p in pts]), lon=np.array([p[1] for p in pts]),

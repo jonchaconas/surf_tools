@@ -55,6 +55,29 @@ September. WW3 has a few outages, including 1–15 November 2025, 1 day of July 
 it is estimated from the mean swell period, using the median peak/mean ratio from the
 other seas.
 
+## Regional pages: Greece and Lake Michigan
+
+[`surfmap/regions.py`](surfmap/regions.py) samples named coasts at Open-Meteo's own model
+cells, a few km offshore. Enclosed seas rarely see groundswell, so these pages also count
+**surfable windswell** mornings, a regional standard:
+
+- total wave height 3–10 ft (0.9–3 m);
+- mean period of at least 5 s;
+- waves arriving within 75° of the direction the shore faces.
+
+The open-ocean good+ percentage is shown next to it for comparison.
+
+## Morning wind
+
+[`surfmap/wind.py`](surfmap/wind.py) samples NOAA GFS 10 m wind (PacIOOS ERDDAP `ncep_global`)
+just offshore of every break, stretch and regional coast. It takes the 3-hourly step
+nearest 08:00 solar time, every third morning from December 2022 on. Wind is shown on the
+pages but not used in either rule.
+
+The dataset's latitude axis is mirrored: a request for 39.5 returns data for 39.5°S. The
+code therefore requests the opposite sign. This was checked against ERA5 on matching
+mornings.
+
 ## Usage
 
 Requires [uv](https://docs.astral.sh/uv/).
