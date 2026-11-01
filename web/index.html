@@ -650,7 +650,7 @@ function setupForecast(fc) {
       v.forEach((x, k) => { if (x !== null && k < 11) rec[k] = Math.max(0, Math.min(254, Math.round(x / meta.scale[k]))); });
       if (p.tc && p.tide_m) rec[tide] = Math.max(0, Math.min(100, Math.round(100 * (tideHeight(p.tc, utc) - p.tide_m[0]) / Math.max(p.tide_m[1] - p.tide_m[0], 0.01))));
       if (!days.has(day)) days.set(day, {});
-      days.get(day)[h] = { utc, rec, gust: v[11] ?? null };
+      days.get(day)[h] = { utc, rec, gust: v[11] ?? null, air: v[12] ?? null, rain: v[13] ?? null, rainChance: v[14] ?? null };
     }
     rows.set(i, [...days].sort(([a], [b]) => (a < b ? -1 : 1)).slice(0, 8).map(([day, at]) => ({ day, at })));
   }
@@ -696,6 +696,8 @@ function sessionText(p, s) {  // the full story of one forecast session, for its
   if (kw !== null) parts.push(`energy ${Math.round(kw)} kJ`);
   if (r[9] !== 255) parts.push(`wind ${Math.round(r[9] * meta.scale[9])} kt${s.gust != null ? ` gusting ${Math.round(s.gust)}` : ""} from ${compass(r[10] * meta.scale[10])}, ${windWord(r[10] * meta.scale[10], p.facing)}`);
   if (r[meta.morning.indexOf("tide")] !== 255) parts.push(`tide ${r[meta.morning.indexOf("tide")]}%`);
+  if (s.air != null) parts.push(`air ${Math.round(s.air)} °C`);
+  if (s.rain != null && s.rain >= 0.05) parts.push(`rain ${s.rain.toFixed(1)} mm`);
   return (parts.join(" · ") || "no data") + ` · ${QUALITY[session(p, r).q][1]}`;
 }
 const fcCols = () => [...new Set([8, 12, 15, ...hoursOn])].filter(h => (forecast?.hours || meta.hours).includes(h)).sort((a, b) => a - b);
@@ -742,6 +744,15 @@ function fcTable(p, list, heading) {  // a row a day, a column per time of day; 
     `<div class="fckey">${QUALITY.map(([c, n]) => `<span style="--q:${c}">${n}</span>`).join("")}</div><div id="fcinfo"></div>` +
     (w ? `<div class="note">Water ${w.c.toFixed(1)} °C (${fdeg(w.c)} °F) on ${w.day} ${w.near ? `at ${esc(w.near)}` : "here"} (${w.src === "GLSEA" ? "GLERL's Great Lakes satellite analysis" : "NOAA OISST satellite analysis"}), carried along the season's usual warming or cooling; wetsuits by Xcel's temperature guide.</div>` : "");
 }
+function nearbyWeather(p, day, h) {  // a clicked place's air and rain: the nearest marked break's within 100 km
+  if (!forecast || !isFinite(p.lat)) return null;
+  let best = null, bd = 100;
+  for (const [i, list] of forecast.rows) {
+    const q = meta.points[i], d = km(p, q), x = list.find(r => r.day === day)?.at[h];
+    if (d < bd && x && (x.air != null || x.rain != null)) { bd = d; best = { ...x, near: q.name }; }
+  }
+  return best;
+}
 function sessionInfo({ p, list, w }, day, h) {  // one forecast square in full: every train, the wind, tide, water and each test
   const s = list.find(d => d.day === day)?.at[h];
   if (!s) return "";
@@ -760,6 +771,10 @@ function sessionInfo({ p, list, w }, day, h) {  // one forecast square in full: 
     const now = tideHeight(p.tc, s.utc), next = tideHeight(p.tc, new Date(Date.parse(s.utc + ":00:00Z") + 3600e3).toISOString().slice(0, 13));
     rows.push(["Tide", `${now.toFixed(1)} m, ${r[ti]}% of its range, ${next > now ? "rising" : "falling"}`]);
   }
+  const wx = s.air != null || s.rain != null ? s : nearbyWeather(p, day, h);
+  if (wx?.air != null) rows.push(["Air", `${Math.round(wx.air)} °C (${fdeg(wx.air)} °F)${wx.near ? ` at ${esc(wx.near)}` : ""}`]);
+  if (wx?.rain != null || wx?.rainChance != null)
+    rows.push(["Rain", `${wx.rain == null ? "" : wx.rain < 0.05 ? "dry" : `${wx.rain.toFixed(1)} mm in the hour`}${wx.rainChance != null ? `${wx.rain == null ? "" : ", "}${Math.round(wx.rainChance)}% chance` : ""}`]);
   if (w) { const c = waterOn(w, day); rows.push(["Water", `${c.toFixed(1)} °C (${fdeg(c)} °F) · ${suitFor(c)[1]}`]); }
   if (t) {
     const [hft, tp, from] = t;

@@ -4,14 +4,16 @@ judges each one by the viewer's own criteria.
 Waves: NOAA's Great Lakes wave model (GLWU, 2.5 km) on the Great Lakes; CDIP MOP's nearshore forecast in
 California; elsewhere Copernicus Marine's MFWAM forecast at
 the break's own ~8 km cell (the same model and cell as the ten-year record) when a Copernicus login is
-available, else Open-Meteo's marine forecast. Wind: Open-Meteo's 10 m wind and gusts just offshore.
+available, else Open-Meteo's marine forecast. Weather: Open-Meteo's 10 m wind and gusts, air temperature
+and rain just offshore (GFS from the swell chart's download when Open-Meteo is out of quota).
 Tide is left to the page, which has each break's tide constituents. Each day is sampled at every
 hour in config.HOURS (local solar time), dated by the local day. Water: the latest satellite reading
 at each break (water()), GLERL's GLSEA in the Great Lakes and NOAA's OISST elsewhere, for the wetsuit.
 
 Reads the break list from web/data/meta.json and writes web/data/forecast.json:
     {"generated": ISO time, "sources": {...}, "hours": [...], "points": {"name@lat,lon": {"8": [[day,
-     utc hour, hs1, tp1, dir1, hs2, tp2, dir2, hs, tp, dir, kt, wind_from, gust_kt], ...], "12": [...], ...}},
+     utc hour, hs1, tp1, dir1, hs2, tp2, dir2, hs, tp, dir, kt, wind_from, gust_kt, air_c, rain_mm,
+     rain_chance_pct], ...], "12": [...], ...}},
      "water": {"name@lat,lon": [°C, day, source]}}
 
 chart() writes the map's swell chart: the whole ocean on a 1 degree grid every CHART_STEP_H hours,
@@ -158,12 +160,17 @@ def _marine_fallback(pts):
     return out
 
 
-def _wind(pts):
+WEATHER_NAMES = ["wind_speed_10m", "wind_direction_10m", "wind_gusts_10m", "temperature_2m", "precipitation", "precipitation_probability"]
+_GFS = {}  # air temperature and rain grids from chart()'s GFS download, for _from_chart()
+
+
+def _weather(pts):
+    """{key: rows of wind (kt), its direction, gusts, air °C, rain mm in the hour and its chance %}."""
     from .points import WIND_DEG, _out
 
     spots = [tuple(float(x) for x in _out(p["lat"], p["lon"], p["facing"], WIND_DEG)) for p in pts]
     out = {}
-    names = ["wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"]
+    names = WEATHER_NAMES
     for p, h in zip(pts, _open_meteo(WEATHER, spots, names, dict(wind_speed_unit="kn"))):
         if h:
             cols = [np.array([np.nan if v is None else v for v in h[n]], float) for n in names]
@@ -199,7 +206,7 @@ def build():
         except Exception as e:  # out of quota: the swell chart below
             print(f"  Open-Meteo waves failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
     try:
-        wind = _wind(pts)
+        wind = _weather(pts)
     except Exception as e:
         print(f"  Open-Meteo wind failed: {type(e).__name__}: {str(e)[:120]}", flush=True)
         wind = {}
@@ -223,7 +230,7 @@ def build():
         for h in config.HOURS:
             w, v = waves.get(k, {}).get(h, {}), wind.get(k, {}).get(h, {})
             rows = [[day, utc, *[None if not np.isfinite(x) else round(float(x), 2) for x in vals],
-                     *[None if not np.isfinite(x) else round(float(x), 1) for x in v.get(day, (None, [np.nan] * 3))[1]]]
+                     *[None if not np.isfinite(x) else round(float(x), 1) for x in v.get(day, (None, [np.nan] * len(WEATHER_NAMES)))[1]]]
                     for day, (utc, vals) in sorted(w.items())]
             if rows:
                 per[str(h)] = rows[:DAYS]
@@ -268,9 +275,10 @@ def chart():
     stamp = f"{t0:%Y-%m-%dT%H}:00:00Z"
     waves = _erddap("NWW3_Global_Best", ["Thgt", "Tper", "Tdir"],
                     f"[({stamp}):{CHART_STEP_H}:last][(0.0)][(-77.5):2:(77.5)][(0.0):2:(359.5)]").squeeze("depth", drop=True)
-    wind = _erddap("NCEP_Global_Best", ["ugrd10m", "vgrd10m"], f"[({stamp}):{CHART_STEP_H // 3}:last][(77.5):2:(-77.5)][(0.0):2:(359.5)]")
+    wind = _erddap("NCEP_Global_Best", ["ugrd10m", "vgrd10m", "tmp2m", "pratesfc"], f"[({stamp}):{CHART_STEP_H // 3}:last][(77.5):2:(-77.5)][(0.0):2:(359.5)]")
     wind = wind.sortby("latitude").sel(time=waves.time, method="nearest", tolerance=np.timedelta64(90, "m"))
     u, v = wind.ugrd10m.values, wind.vgrd10m.values
+    _GFS.update(air=wind.tmp2m.values - 273.15, rain=wind.pratesfc.values * 3600)  # K -> °C, kg m-2 s-1 -> mm an hour
     fields = {"hs": waves.Thgt.values, "tp": waves.Tper.values, "dir": waves.Tdir.values % 360,
               "kt": np.hypot(u, v) * KT, "wind_from": np.degrees(np.arctan2(-u, -v)) % 360}
     with np.errstate(invalid="ignore"):
@@ -473,11 +481,12 @@ def _from_chart(pts):
     for p in pts:
         d = np.hypot(*np.meshgrid((lon - p["lon"] + 180) % 360 - 180, lat - p["lat"])[::-1] * np.array([1, np.cos(np.radians(p["lat"]))])[:, None, None])
         a, b = np.unravel_index(np.argmin(d), d.shape)
-        wind[key(p)] = _rows(times, p["lon"], [field("kt", a, b), field("wind_from", a, b), np.full(len(times), np.nan)], hours)
+        nan = np.full(len(times), np.nan)
+        air, rain = (_GFS[n][:, a, b] if n in _GFS else nan for n in ("air", "rain"))
+        wind[key(p)] = _rows(times, p["lon"], [field("kt", a, b), field("wind_from", a, b), nan, air, rain, nan], hours)
         dw = np.where(wet, d, np.inf)
         a, b = np.unravel_index(np.argmin(dw), dw.shape)
         if dw[a, b] <= 1.5:
             hs, tp, dr = field("hs", a, b), field("tp", a, b), field("dir", a, b)
-            nan = np.full(len(times), np.nan)
             waves[key(p)] = _rows(times, p["lon"], [hs, tp, dr, nan, nan, nan, hs, tp, dr], hours)
     return waves, wind

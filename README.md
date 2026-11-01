@@ -83,7 +83,8 @@ Breakout tables are listed by year-round consistency.
   period with an arrow for where it's heading, and the wind in knots with gusts and its own arrow, and
   the wave energy in kJ.
   Click a square for its full story: every swell train with its breaking height and energy, wind
-  and gusts, the tide and whether it's rising, water and wetsuit, and a ✓ or ✗ for each criterion.
+  and gusts, air temperature and rain, the tide and whether it's rising, water and wetsuit, and a ✓ or
+  ✗ for each criterion.
   Cells run red to green: green meets your criteria; the rest score how near they come on swell
   size and period, swell direction, wind and tide. "This week" ranks the spots in view by good
   days at your chosen times, each with a strip of the eight days. Click any coast or patch of
