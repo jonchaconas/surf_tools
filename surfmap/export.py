@@ -196,6 +196,40 @@ def _points():
     return out, base64.b64encode(gzip.compress(body, 6)).decode("ascii")
 
 
+GAP_KM = 100  # every stretch of shore gets a clickable spot within this distance: one per ~200 km of coast
+
+
+def _coast_points(shore, existing):
+    """[[name, region and country, lat, lon]]: points on the shoreline (the coastal band's pixels next
+    to land) placed so no shore is more than GAP_KM from a spot, counting the named breaks,
+    stretches, regional coasts and OpenStreetMap spots already there. Named after the nearest town."""
+    from scipy.spatial import cKDTree
+
+    from .discover import _xyz
+
+    lat, lon = shore
+    xyz = _xyz(lat, lon)
+    have = cKDTree(_xyz(np.array([e[0] for e in existing]), np.array([e[1] for e in existing])))
+    far = have.query(xyz)[0] * 6371
+    chosen = np.empty((0, 3))
+    picks = []
+    for i in np.flatnonzero(far > GAP_KM)[np.argsort(-far[far > GAP_KM])]:  # biggest gaps first
+        if len(chosen) and np.min(np.linalg.norm(chosen - xyz[i], axis=1)) * 6371 <= GAP_KM:
+            continue
+        chosen = np.vstack([chosen, xyz[i]])
+        picks.append(i)
+    places = _places()
+    ptree = cKDTree(_xyz(np.array([p[3] for p in places]), np.array([p[4] for p in places])))
+    out = []
+    for i in picks:
+        d, k = ptree.query(xyz[i])
+        name, region, country = places[k][:3]
+        out.append([name if d * 6371 <= 150 else f"{abs(lat[i]):.1f}°{'N' if lat[i] >= 0 else 'S'} "
+                    f"{abs(lon[i]):.1f}°{'E' if lon[i] >= 0 else 'W'}",
+                    ", ".join(x for x in (region, country) if x), round(float(lat[i]), 3), round(float(lon[i]), 3)])
+    return out
+
+
 def _places():
     """[[name, region, country, lat, lon]] for every Natural Earth populated place (10m), so the page
     can name any stretch of coast after its nearest town."""
@@ -385,7 +419,7 @@ def _raster(cells, res, land, charted):
         basin=dict(pix=bpix, nb=bnb, w=bw),
         coast=dict(n=len(ci), fringe=len(fringe), sources=sources,
                    data=base64.b64encode(gzip.compress(coast_bin, 9)).decode("ascii")),
-    ), sources
+    ), sources, (clat[ok][alpha == 1], clon[ok][alpha == 1])
 
 
 def export(res=2):
@@ -407,7 +441,10 @@ def export(res=2):
     (OUT / "osm.json").write_text(json.dumps(surf, separators=(",", ":"), ensure_ascii=False))
     charted = [(la, lo) for _, _, la, lo, _ in SPOTS] + [(la, lo) for _, la, lo in surf] + \
         [(c[2], c[3]) for spec in regions.REGIONS.values() for c in spec["coasts"]]
-    raster, sources = _raster(cells, res, land, charted)
+    raster, sources, shore = _raster(cells, res, land, charted)
+    gaps = _coast_points(shore, charted + [(e[2], e[3]) for e in STRETCHES])
+    (OUT / "coastpts.json").write_text(json.dumps(gaps, separators=(",", ":"), ensure_ascii=False))
+    print(f"  coast points filling the gaps: {len(gaps)}", flush=True)
     (OUT / "raster.json").write_text(json.dumps(raster, separators=(",", ":")))
     (OUT / "coast.b64.txt").write_text(_pack(_hists(samples, sources, direction=True), len(sources)))
     # The same split by year, which the page loads only when the years slider narrows the record.
