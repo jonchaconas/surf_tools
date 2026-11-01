@@ -36,6 +36,32 @@ The month-by-month tables show, for each coast:
 
 Breakout tables are listed by year-round consistency.
 
+## Interactive atlas
+
+[`web/index.html`](web/index.html) is an interactive version of the PDF:
+
+- **Map:** zoom and pan the world map, and switch between year-round, the half years or any
+  single month.
+- **Click anywhere:** a named break, an under-the-radar stretch, a regional coast or any patch
+  of ocean shows its month-by-month chart, typical good morning, tide range and morning wind.
+- **Your own definition of good:** set minimum swell size and period, the long-period
+  alternative, the largest surf you want, how much wind chop to allow, and how directly a break
+  must face the swell. The map and the best-spots list update as you go. Presets include
+  longboard, shortboard, big days and lake surf.
+
+To make this work in a browser, each month's mornings are pre-counted into bins of swell height ×
+period × chop (plus an angle-to-the-shore bin for named coasts) by
+[`surfmap/export.py`](surfmap/export.py). Any criteria then reduce to sums over bins. The data in
+`web/data/` is on a 2° ocean grid, about 13 MB.
+
+Run it locally, at 1° resolution, with buttons to download new data and rebuild the PDF:
+
+```sh
+uv run python -m surfmap gui
+```
+
+`web/` is a static site, so it can also be hosted as is, for example on GitHub Pages.
+
 ## What counts as good
 
 Each day is judged on **one model snapshot near 08:00 local solar time**.
@@ -117,6 +143,7 @@ uv run python -m surfmap fetch --source inland      # enclosed-sea grids from Op
 uv run python -m surfmap fetch --source copernicus  # fills anything Open-Meteo hasn't delivered
 uv run python -m surfmap discover                   # optional: re-find the under-the-radar stretches
 uv run python -m surfmap build                      # writes surf_good_days.pdf
+uv run python -m surfmap export --res 2             # data for the interactive atlas (web/data)
 ```
 
 **Downloads.** Everything is cached in `data/`, which git ignores, and every fetch can be
