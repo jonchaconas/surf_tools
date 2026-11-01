@@ -45,8 +45,14 @@ def _codes(hs, tp, ws=None):
 
 
 def _hist(codes, valid):
+    """(codes, counts, mornings). A count over 255 is split into repeated entries of one code."""
     u, n = np.unique(codes[valid], return_counts=True)
-    return u.astype(np.uint16), n.astype(np.uint8), int(valid.sum())
+    us, ns = [u], [np.minimum(n, 255)]
+    while (n > 255).any():
+        u, n = u[n > 255], n[n > 255] - 255
+        us.append(u)
+        ns.append(np.minimum(n, 255))
+    return np.concatenate(us).astype(np.uint16), np.concatenate(ns).astype(np.uint8), int(valid.sum())
 
 
 def _pack(hists, n):
@@ -70,22 +76,25 @@ def _sector(frm):
 
 
 def _grid(stride):
-    """Ocean cells from WW3 (every stride-th 1 degree cell) plus the enclosed-sea points, each with
-    plain histograms and direction-split ones (code * 16 + sector) for the coastal band."""
+    """Ocean cells from WW3 (every stride-th 1 degree cell) plus the enclosed-sea points.
+
+    Returns (cells, samples, years): samples(e, m) gives cell e's mornings in calendar month m
+    (0-11) as (codes, direction codes = code * 16 + sector, valid, year), from which _hists makes
+    histograms over every year or a single one."""
     per_month, lat, lon = [], None, None
     for m in range(1, 13):
         ds = ww3.load(m).isel(lat=slice(None, None, stride), lon=slice(None, None, stride))
         hs, tp, ws = ds.shgt.values, ds.sper.values, ds.whgt.values
         lat, lon = ds.lat.values, ds.lon.values
         code = _codes(hs, tp, ws)
-        per_month.append((code, code * 16 + _sector(ds.sdir.values), rating.has_sea(hs, ws)))
+        per_month.append((code.astype(np.uint16), (code * 16 + _sector(ds.sdir.values)).astype(np.uint16),
+                          rating.has_sea(hs, ws), ds.day.dt.year.values))
         print(f"  grid month {m}", flush=True)
-    days = sum(v.sum(0) for _, _, v in per_month)
+    days = sum(v.sum(0) for _, _, v, _ in per_month)
     keep = np.argwhere(days > 0.5 * days.max())
     cells = [dict(lat=float(lat[i]), lon=float(lon[j]), size=float(stride), kind="ocean", basin=None)
              for i, j in keep]
-    hists = [[_hist(c[:, i, j], v[:, i, j]) for c, _, v in per_month] for i, j in keep]
-    dhists = [[_hist(d[:, i, j], v[:, i, j]) for _, d, v in per_month] for i, j in keep]
+    where = [("ocean", int(i), int(j)) for i, j in keep]
 
     basins = [inland.load(m) for m in range(1, 13)]
     for name, (spacing, *_) in inland.BASINS.items():
@@ -93,24 +102,45 @@ def _grid(stride):
             continue
         b0 = basins[0][name]
         for k in range(len(b0["lat"])):
-            per, dper = [], []
+            per = []
             for b in (bm[name] for bm in basins):
                 hs = b["wave_hs"][k]
                 code = _codes(hs, b["wave_tm"][k] * b["ratio"])
-                per.append(_hist(code, np.isfinite(hs)))
-                dper.append(_hist(code * 16 + _sector(b["wave_dir"][k]), np.isfinite(hs)))
-            if sum(p[2] for p in per):
+                per.append((code, code * 16 + _sector(b["wave_dir"][k]), np.isfinite(hs),
+                            b["day"].astype("datetime64[Y]").astype(int) + 1970))
+            if sum(p[2].sum() for p in per):
                 cells.append(dict(lat=float(b0["lat"][k]), lon=float(b0["lon"][k]), size=spacing, kind="enclosed",
                                   basin=name))
-                hists.append(per)
-                dhists.append(dper)
-    return cells, hists, dhists
+                where.append(("basin", per))
+
+    def samples(e, m):
+        w = where[e]
+        if w[0] == "basin":
+            return w[1][m]
+        c, d, v, y = per_month[m]
+        return c[:, w[1], w[2]], d[:, w[1], w[2]], v[:, w[1], w[2]], y
+
+    years = sorted({int(y) for *_, ys in per_month for y in ys})
+    return cells, samples, years
+
+
+def _hists(samples, entities, year=None, direction=False):
+    """Per entity, per calendar month: _hist of its codes (or direction codes), all years or one."""
+    out = []
+    for e in entities:
+        per = []
+        for m in range(12):
+            c, d, v, y = samples(e, m)
+            per.append(_hist(d if direction else c, v if year is None else v & (y == year)))
+        out.append(per)
+    return out
 
 
 # One morning at a point, as bytes (255 = none): swell 1 and 2 as height (0.05 m), peak period
-# (0.1 s) and direction (2 degrees); all waves as the same three; wind speed (0.5 kt) and direction.
+# (0.1 s) and direction (2 degrees); all waves as the same three; wind speed (0.5 kt) and direction;
+# the year (since 2000).
 MORNING = [("hs1", 0.05), ("tp1", 0.1), ("dir1", 2), ("hs2", 0.05), ("tp2", 0.1), ("dir2", 2),
-           ("hs", 0.05), ("tp", 0.1), ("dir", 2), ("kt", 0.5), ("wind_from", 2)]
+           ("hs", 0.05), ("tp", 0.1), ("dir", 2), ("kt", 0.5), ("wind_from", 2), ("year", 1)]
 
 
 def _records(s):
@@ -119,7 +149,8 @@ def _records(s):
 
     cols = []
     for key, step in MORNING:
-        v = s["tm"] * TP_RATIO if key == "tp" else s[key]
+        v = s["tm"] * TP_RATIO if key == "tp" else \
+            s["day"].astype("datetime64[Y]").astype(int) + 1970 - 2000 if key == "year" else s[key]
         q = np.round(np.asarray(v, float) / step)
         cols.append(np.where(np.isfinite(q), np.clip(q, 0, 254), 255).astype(np.uint8))
     return np.stack(cols, axis=1)
@@ -245,7 +276,7 @@ def _open_sectors(lat, lon, land, ray_km):
     return np.round(out / RAYS * 255).astype(np.uint8)
 
 
-def _raster(cells, res, dhists, land, charted):
+def _raster(cells, res, land, charted):
     """Everything the page needs to draw a smooth field that follows the coast, on the 0.25 degree grid:
     cat: 0 ocean (interpolate the ocean grid), 1 enclosed sea (inverse-distance from its own points),
          2 water no source reaches (shown as no data), 3 land.
@@ -354,15 +385,17 @@ def _raster(cells, res, dhists, land, charted):
         basin=dict(pix=bpix, nb=bnb, w=bw),
         coast=dict(n=len(ci), fringe=len(fringe), sources=sources,
                    data=base64.b64encode(gzip.compress(coast_bin, 9)).decode("ascii")),
-    ), _pack([dhists[c] for c in sources], len(sources))
+    ), sources
 
 
 def export(res=2):
     """Write web/data/{meta.json, grid.b64.txt, points.b64.txt, coast.b64.txt, land.json, raster.json, osm.json,
     places.json}."""
     OUT.mkdir(parents=True, exist_ok=True)
-    cells, grid, dgrid = _grid(int(res))
-    (OUT / "grid.b64.txt").write_text(_pack(grid, len(cells)))
+    for old in [*OUT.glob("grid_*.b64.txt"), *OUT.glob("coast_*.b64.txt")]:
+        old.unlink()
+    cells, samples, years = _grid(int(res))
+    (OUT / "grid.b64.txt").write_text(_pack(_hists(samples, range(len(cells))), len(cells)))
     points, pts = _points()
     (OUT / "points.b64.txt").write_text(pts)
     (OUT / "land.json").write_text(json.dumps(_land(), separators=(",", ":")))
@@ -374,12 +407,17 @@ def export(res=2):
     (OUT / "osm.json").write_text(json.dumps(surf, separators=(",", ":"), ensure_ascii=False))
     charted = [(la, lo) for _, _, la, lo, _ in SPOTS] + [(la, lo) for _, la, lo in surf] + \
         [(c[2], c[3]) for spec in regions.REGIONS.values() for c in spec["coasts"]]
-    raster, coast = _raster(cells, res, dgrid, land, charted)
+    raster, sources = _raster(cells, res, land, charted)
     (OUT / "raster.json").write_text(json.dumps(raster, separators=(",", ":")))
-    (OUT / "coast.b64.txt").write_text(coast)
+    (OUT / "coast.b64.txt").write_text(_pack(_hists(samples, sources, direction=True), len(sources)))
+    # The same split by year, which the page loads only when the years slider narrows the record.
+    for y in years:
+        (OUT / f"grid_{y}.b64.txt").write_text(_pack(_hists(samples, range(len(cells)), y), len(cells)))
+        (OUT / f"coast_{y}.b64.txt").write_text(_pack(_hists(samples, sources, y, True), len(sources)))
+        print(f"  year {y}", flush=True)
     meta = dict(
         generated=date.today().isoformat(), res=res,
-        seasons={m: list(config.seasons(m)) for m in range(1, 13)},
+        seasons={m: list(config.seasons(m)) for m in range(1, 13)}, years=years,
         bins=dict(height_ft=H_BINS, period_s=T_BINS, period_start=5, clean=CLEAN),
         morning=[k for k, _ in MORNING], scale=[step for _, step in MORNING],
         offshore=config.OFFSHORE,

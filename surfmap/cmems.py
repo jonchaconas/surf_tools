@@ -109,7 +109,7 @@ def fill(workers=4):
     points = sorted({p for _, pts, _, _ in jobs for p in pts})
     OUT.mkdir(parents=True, exist_ok=True)
     print(f"Copernicus: {len(jobs)} files missing, {len(points)} points to fetch", flush=True)
-    early = sorted({p for _, pts, d0, _ in jobs if d0 < SPAN[0] for p in pts})
+    early = sorted({p for _, pts, d0, _ in jobs if d0 < SPAN[0].date() for p in pts})
     with ThreadPoolExecutor(workers) as ex:
         list(ex.map(_fetch_point, points))
         list(ex.map(lambda p: _fetch_point(p, early=True), early))

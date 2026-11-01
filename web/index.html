@@ -57,6 +57,17 @@ select { font: 14px var(--body); color: var(--ink); background: var(--panel); bo
 .check input { accent-color: var(--accent); }
 .sub { padding-left: 10px; border-left: 2px solid var(--rule); display: grid; gap: 8px; }
 .note { font-size: 12px; color: var(--muted); line-height: 1.45; }
+/* Section notes live behind an (i) by the heading: hover, or tap, to read. */
+section.block { position: relative; }
+.info { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 6px; padding: 0; vertical-align: 2px;
+  border: 1px solid var(--muted); border-radius: 50%; background: transparent; color: var(--muted);
+  font: italic 600 11px/1 Georgia, serif; letter-spacing: 0; text-transform: none; cursor: pointer; }
+.info:hover, .info[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.popover { display: none; position: absolute; z-index: 5; left: 12px; right: 12px; top: 38px; padding: 10px 12px;
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.18); }
+.popover .note { color: var(--ink); margin: 0 0 6px; }
+.popover .note:last-child { margin-bottom: 0; }
+section.peek .popover, section.open .popover { display: block; }
 
 .detail-empty { color: var(--muted); font-size: 13px; }
 .detail h3 { font: 700 22px var(--display); margin: 0; text-wrap: balance; }
@@ -98,7 +109,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
 
 <div class="app">
   <header>
-    <h1>Predictive Surf Atlas<small>how often the surf is good, from five years of wave-model mornings</small></h1>
+    <h1>Predictive Surf Atlas<small id="subtitle">how often the surf is good, from years of wave-model mornings</small></h1>
     <div class="periods" role="group" aria-label="Period" id="periods"></div>
   </header>
   <main>
@@ -106,7 +117,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
       <canvas id="map" aria-label="World map of how often the surf is good"></canvas>
       <div class="zoombtns"><button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out">−</button><button id="zreset" aria-label="Reset view">⟲</button></div>
       <div class="maphint" id="maphint">
-        <div><strong id="hintperiod">Year-round</strong> · share of mornings that are good by your criteria</div>
+        <div><strong id="hintperiod">Year-round</strong> · share of mornings that are good by your criteria <span id="yearstatus"></span></div>
         <div class="legend" id="legend"></div>
         <div class="legend-labels" id="legendlabels"></div>
         <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast &nbsp; ✶ uncharted &nbsp; · surf spot (OSM) &nbsp; <span class="swatch" style="background:var(--nodata)"></span>no data · click anywhere</div>
@@ -117,6 +128,12 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
       <section class="block detail" id="detail" aria-live="polite">
         <h2>Selected</h2>
         <p class="detail-empty">Click a break, any stretch of coast or any patch of ocean to see its month-by-month chart.</p>
+      </section>
+
+      <section class="block">
+        <h2>Years of data</h2>
+        <label class="row" for="yfrom">From <span class="val" id="yfromv"></span><input type="range" id="yfrom" step="1"></label>
+        <label class="row" for="yto">To <span class="val" id="ytov"></span><input type="range" id="yto" step="1"></label>
       </section>
 
       <section class="block">
@@ -167,6 +184,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
       </section>
 
       <section class="block">
+        <h2>About the data</h2>
         <p class="note" id="about">Open data: NOAA WAVEWATCH III (PacIOOS), Météo-France MFWAM (Open-Meteo, Copernicus Marine), NOAA GFS wind, EOT20 tides (DGFI-TUM), Natural Earth; surf spots © OpenStreetMap contributors (ODbL). Offshore sea state only: reefs, sheltering and local wind aren't modelled. Code: github.com/jonchaconas/surf_tools</p>
       </section>
     </aside>
@@ -198,6 +216,8 @@ const PRESETS = [
 const crit = { ...PRESETS[0] };
 let period = PERIODS[0];
 let meta, land, grid, pts, coastBins, R, osm = [], places = [], selected = null, transform = d3.zoomIdentity;
+let gridAll, coastAll, yr = { from: 0, to: 9999 };
+const yearStores = {};  // year -> { grid, coast }, fetched when the years slider first needs them
 
 const colorFor = p => !isFinite(p) ? null : COLORS[Math.min(COLORS.length - 1, Math.max(0, d3.bisectRight(LEVELS, p) - 1))];
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -294,9 +314,63 @@ function goodTrain(p, r, o) {  // the train that makes this morning good (the bi
   const a = train(r, o, 0), b = train(r, o, 1), okA = trainOk(a, p.facing), okB = trainOk(b, p.facing);
   return okA && okB ? (b[0] > a[0] ? b : a) : okA ? a : okB ? b : null;
 }
-function eachMorning(e, months, visit) {
-  const { start, width } = pts;
-  for (const m of months) for (let k = start[e * 12 + m - 1]; k < start[e * 12 + m]; k++) visit(k * width);
+function eachMorning(e, months, visit) {  // the point's mornings in these months and the chosen years
+  const { start, width, recs } = pts, y = pts.year, y0 = yr.from - 2000, y1 = yr.to - 2000;
+  for (const m of months) for (let k = start[e * 12 + m - 1]; k < start[e * 12 + m]; k++) {
+    const o = k * width;
+    if (y < 0 || (recs[o + y] >= y0 && recs[o + y] <= y1)) visit(o);
+  }
+}
+
+// ---------- years: the whole record from the totals, or any run of years from per-year files ----------
+function mergeStores(stores) {  // concatenate per-year histograms; repeated codes simply add up
+  const n = stores[0].n, N = n * 12, days = new Uint16Array(N), start = new Uint32Array(N + 1);
+  const total = stores.reduce((a, s) => a + s.start[N], 0), codes = new Uint16Array(total), counts = new Uint8Array(total);
+  let k = 0;
+  for (let i = 0; i < N; i++) {
+    start[i] = k;
+    for (const s of stores) {
+      days[i] += s.days[i];
+      for (let j = s.start[i]; j < s.start[i + 1]; j++, k++) { codes[k] = s.codes[j]; counts[k] = s.counts[j]; }
+    }
+  }
+  start[N] = k;
+  return { n, days, start, codes, counts };
+}
+const yearsLabel = () => yr.from === meta.years[0] && yr.to === meta.years.at(-1) ? "" : yr.from === yr.to ? ` · ${yr.from}` : ` · ${yr.from}–${yr.to}`;
+let yearsBusy = 0;
+async function applyYears() {
+  const ys = meta.years.filter(y => y >= yr.from && y <= yr.to), ticket = ++yearsBusy, status = document.getElementById("yearstatus");
+  if (ys.length === meta.years.length) { grid = gridAll; coastBins = coastAll; }
+  else {
+    const missing = ys.filter(y => !yearStores[y]);
+    if (missing.length) status.textContent = `· loading ${missing.length} year${missing.length > 1 ? "s" : ""}…`;
+    await Promise.all(missing.map(async y => {
+      const [g, c] = await Promise.all([bytes(`data/grid_${y}.b64.txt`), bytes(`data/coast_${y}.b64.txt`)]);
+      yearStores[y] = { grid: unpack(g, meta.cells.lat.length), coast: unpack(c, R.sources.length) };
+    }));
+    if (ticket !== yearsBusy) return;  // the slider moved on while loading
+    grid = mergeStores(ys.map(y => yearStores[y].grid)); coastBins = mergeStores(ys.map(y => yearStores[y].coast));
+  }
+  status.textContent = "";
+  document.getElementById("hintperiod").textContent = period.label + yearsLabel();
+  recompute();
+}
+function setupYears() {
+  const ys = meta.years, from = document.getElementById("yfrom"), to = document.getElementById("yto");
+  yr = { from: ys[0], to: ys.at(-1) };
+  for (const el of [from, to]) { el.min = ys[0]; el.max = ys.at(-1); }
+  from.value = yr.from; to.value = yr.to;
+  const show = () => { document.getElementById("yfromv").textContent = yr.from; document.getElementById("ytov").textContent = yr.to; };
+  show();
+  let wait;
+  const changed = which => {
+    yr.from = +from.value; yr.to = +to.value;
+    if (yr.from > yr.to) { if (which === from) { yr.to = yr.from; to.value = yr.to; } else { yr.from = yr.to; from.value = yr.from; } }
+    show(); clearTimeout(wait); wait = setTimeout(applyYears, 200);
+  };
+  from.addEventListener("input", () => changed(from)); to.addEventListener("input", () => changed(to));
+  document.getElementById("subtitle").textContent = `how often the surf is good, from ${ys.length} years of wave-model mornings (${ys[0]}–${ys.at(-1)})`;
 }
 function pointShare(e, months) {
   const p = meta.points[e];
@@ -836,7 +910,7 @@ function renderDetail() {
     facts = `<dt>Swell direction</dt><dd>any: open water</dd><dt>Measured on</dt><dd>${selected.enclosed ? "total waves" : "swell"}</dd>`;
   }
   el.innerHTML = `<h2>Selected</h2><div><span class="badge">${badge}</span></div><h3>${title}</h3><div class="note" style="margin-top:-6px">${sub}</div>
-    <div style="display:flex;align-items:center;gap:10px;justify-content:space-between"><div style="display:flex;align-items:baseline;gap:10px"><span class="bigpct">${isFinite(pct) ? Math.round(pct) + "%" : "–"}</span><span class="note">of mornings good · ${period.label}</span></div>${side}</div>
+    <div style="display:flex;align-items:center;gap:10px;justify-content:space-between"><div style="display:flex;align-items:baseline;gap:10px"><span class="bigpct">${isFinite(pct) ? Math.round(pct) + "%" : "–"}</span><span class="note">of mornings good · ${period.label}${yearsLabel()}</span></div>${side}</div>
     ${bars(shares)}
     <dl class="facts"><dt>Best 3 months</dt><dd>${bestMonths(shares)}</dd><dt>Typical good morning</dt><dd>${typ}</dd>${facts}</dl>`;
 }
@@ -923,7 +997,7 @@ function setPeriod() {
     const g = GROUPS.find(x => x.id === c.dataset.id);
     c.setAttribute("aria-pressed", g ? g === group : !fromGroup && picked.has(+c.dataset.m));
   });
-  document.getElementById("hintperiod").textContent = period.label;
+  document.getElementById("hintperiod").textContent = period.label + (meta ? yearsLabel() : "");
 }
 const periodsEl = document.getElementById("periods");
 periodsEl.innerHTML = GROUPS.map(p => `<button class="chip" data-id="${p.id}">${p.label}</button>`).join("") +
@@ -943,6 +1017,30 @@ periodsEl.addEventListener("click", e => {
 setPeriod();
 document.getElementById("legend").innerHTML = COLORS.map(c => `<span style="background:${c}"></span>`).join("");
 document.getElementById("legendlabels").innerHTML = ["0%", "15%", "40%", "100%"].map(t => `<span>${t}</span>`).join("");
+
+// ---------- (i) icons: each panel's notes behind its heading ----------
+function infoIcons() {
+  const close = () => document.querySelectorAll("section.open").forEach(s => { s.classList.remove("open"); s.querySelector(".info").setAttribute("aria-expanded", "false"); });
+  document.querySelectorAll("aside section.block").forEach(sec => {
+    const notes = [...sec.querySelectorAll(":scope > p.note")], h2 = sec.querySelector(":scope > h2");
+    if (!notes.length || !h2) return;
+    const btn = document.createElement("button"), pop = document.createElement("div");
+    btn.type = "button"; btn.className = "info"; btn.textContent = "i";
+    btn.setAttribute("aria-label", `About: ${h2.firstChild.textContent.trim()}`); btn.setAttribute("aria-expanded", "false");
+    pop.className = "popover"; pop.setAttribute("role", "note"); pop.append(...notes);
+    h2.append(btn); sec.append(pop);
+    btn.addEventListener("mouseenter", () => sec.classList.add("peek"));
+    btn.addEventListener("mouseleave", () => sec.classList.remove("peek"));
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const open = !sec.classList.contains("open");
+      close(); sec.classList.toggle("open", open); btn.setAttribute("aria-expanded", String(open));
+    });
+  });
+  document.addEventListener("click", e => { if (!e.target.closest(".popover")) close(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") close(); });
+}
+infoIcons();
 
 // ---------- local tools (only when served by `python -m surfmap gui`) ----------
 async function localTools() {
@@ -973,11 +1071,13 @@ async function localTools() {
       json("data/land.json"), json("data/raster.json"), json("data/osm.json").catch(() => []), json("data/places.json").catch(() => [])]);
     osm = o.map(([name, lat, lon]) => ({ name, lat, lon }));
     places = pl.map(([name, region, country, lat, lon]) => ({ name, region, country, lat, lon }));
-    grid = unpack(g, meta.cells.lat.length); pts = unpackPoints(p, meta.points.length, meta.morning.length); coastBins = unpack(c, r.coast.sources.length); land = splitLand(l);
+    grid = gridAll = unpack(g, meta.cells.lat.length); pts = unpackPoints(p, meta.points.length, meta.morning.length);
+    pts.year = meta.morning.indexOf("year"); coastBins = coastAll = unpack(c, r.coast.sources.length); land = splitLand(l);
+    meta.years = meta.years || [...new Set(Object.values(meta.seasons).flat())].sort();
     setupRaster(r, new Uint8Array(await inflate(r.cat)), await inflate(r.coast.data));
     document.getElementById("about").textContent += ` · data as of ${meta.generated}; ${meta.res}° ocean grid, coast at ${r.res}°`;
     document.getElementById("loading").hidden = true;
-    palette(); layout(); recompute();
+    setupYears(); palette(); layout(); recompute();
   } catch (err) {
     document.getElementById("loading").textContent = `Couldn't load the data: ${err.message}. Reload the page to try again.`;
   }

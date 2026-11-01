@@ -157,7 +157,7 @@ def morning(row, keep):
     day = t.astype("datetime64[D]")
     h = round(config.LOCAL_HOUR - lon / 15) % 24
     sel = ((t - day).astype(int) == h) & np.isin(day, keep)
-    return {v: np.array(row["hourly"][v], dtype=float)[sel] for v in HOURLY}
+    return {"day": day[sel], **{v: np.array(row["hourly"][v], dtype=float)[sel] for v in HOURLY}}
 
 
 def load(month):
@@ -180,6 +180,7 @@ def load(month):
         if series:
             pts = list(series)
             raw[name] = dict(lat=np.array([p[0] for p in pts]), lon=np.array([p[1] for p in pts]),
+                             day=np.concatenate([s["day"] for s in series[pts[0]]]),
                              **{v: np.stack([np.concatenate([s[v] for s in series[p]]) for p in pts])
                                 for v in HOURLY})
 
@@ -195,7 +196,7 @@ def load(month):
         peak, mean = b["swell_wave_peak_period"], b["swell_wave_period"]
         # Fill per morning: a month can mix Open-Meteo years (with peak) and Copernicus years (without).
         missing = np.isnan(peak) & np.isfinite(mean)
-        out[name] = dict(lat=b["lat"], lon=b["lon"], hs=b["swell_wave_height"],
+        out[name] = dict(lat=b["lat"], lon=b["lon"], day=b["day"], hs=b["swell_wave_height"],
                          tp=np.where(missing, mean * ratio, peak),
                          dir=b["swell_wave_direction"], ws=b["wind_wave_height"],
                          wave_hs=b["wave_height"], wave_tm=b["wave_period"], wave_dir=b["wave_direction"],

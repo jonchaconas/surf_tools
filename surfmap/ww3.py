@@ -17,6 +17,7 @@ import xarray as xr
 from . import config
 
 ERDDAP = "https://pae-paha.pacioos.hawaii.edu/erddap/griddap/ww3_global"
+ARCHIVE_START = datetime(2017, 1, 1, 21)  # first stamp in the archive (config.FIRST_YEAR)
 VARS = ("shgt", "sper", "sdir", "whgt")
 BAND = 30    # degrees of longitude per request; each band is sampled at its own UTC hour
 STRIDE = 2   # native 0.5 degree grid -> 1 degree
@@ -61,7 +62,8 @@ def available_hours(year, month):
     path = OUT / f"time_{year}-{month:02d}.csv"
     if not path.exists():
         last = calendar.monthrange(year, month)[1]
-        q = f"time[({year}-{month:02d}-01T00:00:00Z):1:({year}-{month:02d}-{last}T23:00:00Z)]"
+        first = max(datetime(year, month, 1), ARCHIVE_START)  # ERDDAP 404s on a start before the archive's
+        q = f"time[({first:%Y-%m-%dT%H:%M:%SZ}):1:({year}-{month:02d}-{last}T23:00:00Z)]"
         _download(f"{ERDDAP}.csv?{_quote(q)}", path)
     stamps = (datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ") for s in path.read_text().split()[2:])
     # ERDDAP snaps the range to the nearest stamps, which can fall outside the month.
