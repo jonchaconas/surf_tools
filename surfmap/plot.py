@@ -309,6 +309,16 @@ def _peak(vals):
     return f"{calendar.month_abbr[s + 1]}\u2013{calendar.month_abbr[(s + 2) % 12 + 1]}", means[s]
 
 
+TIDE_NOTE = "Tide range = typical to big-tide daily range (EOT20, DGFI-TUM)."
+
+
+def _tide_text(name):
+    """'5\u20137 ft' from tides.py; 'none' where the model has no ocean tide (Great Lakes, Caspian)."""
+    from . import tides
+
+    return tides.text(name, rating.FT) or "none"
+
+
 WIND_NOTE = ("Morning wind = median speed and most common direction over all mornings of the period, "
              "NOAA GFS 10 m wind just offshore, December 2022 onward.")
 
@@ -326,13 +336,14 @@ def _breakout_page(pdf, title, subtitle, kind, rows, notes):
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     h = 1 / (len(rows) + 1.5)
-    x_month, w_month = 0.30, 0.03
-    x_year, x_worst, x_best = 0.68, 0.725, 0.75
-    x_swell, x_wind = 0.815, 0.93
+    x_month, w_month = 0.30, 0.028
+    x_year, x_worst, x_best = 0.655, 0.697, 0.72
+    x_tide, x_swell, x_wind = 0.78, 0.828, 0.94
     y = 1 - h / 2
     for x, label, ha in [(0.0, "#", "left"), (0.025, kind, "left"), (0.165, "Region", "left"),
                          (x_year, "Year", "center"), (x_worst, "Worst", "center"), (x_best, "Best 3 months", "left"),
-                         (x_swell, "Typical good morning", "left"), (x_wind, "Morning wind", "left")]:
+                         (x_tide, "Tide range", "left"), (x_swell, "Typical good morning", "left"),
+                         (x_wind, "Morning wind", "left")]:
         ax.text(x, y, label, fontsize=8.5, weight="bold", color=INK_2, ha=ha, va="center")
     for k, mon in enumerate("JFMAMJJASOND"):
         ax.text(x_month + (k + 0.5) * w_month, y, mon, fontsize=8.5, weight="bold", color=INK_2,
@@ -356,12 +367,13 @@ def _breakout_page(pdf, title, subtitle, kind, rows, notes):
         ax.text(x_best, y, f"{best} {best_pct:.0f}%", fontsize=size, va="center")
         good = (f"{r['hs'] * rating.FT:.0f} ft @ {r['tp']:.0f} s {_compass(r['dir'], degrees=False)}, "
                 f"surf ~{r['hb'] * rating.FT:.0f} ft") if np.isfinite(r["hs"]) else "\u2013"
+        ax.text(x_tide, y, _tide_text(r["name"]), fontsize=size, color=INK_2, va="center")
         ax.text(x_swell, y, good, fontsize=size, color=INK_2, va="center")
         ax.text(x_wind, y, _wind_text(r["wind"]) or "\u2013", fontsize=size, color=INK_2, va="center")
 
     fig.text(0.02, 0.06, "Month cells use the map colours (% of mornings good+). Typical good morning = medians "
              "over the good+ mornings: swell height @ peak period and the direction it comes from, and estimated "
-             "breaking surf (Komar\u2013Gaughan).\n" + WIND_NOTE, fontsize=7.5, color=INK_2, va="top",
+             "breaking surf (Komar\u2013Gaughan). " + TIDE_NOTE + "\n" + WIND_NOTE, fontsize=7.5, color=INK_2, va="top",
              linespacing=1.5)
     fig.text(0.02, 0.026, notes, fontsize=7.5, color=INK_3, va="top")
     pdf.savefig(fig, dpi=220)
@@ -518,11 +530,12 @@ def _region_table(fig, rect, rows, std):
     tx.set_ylim(0, 1)
     h = 1 / (len(rows) + 1.3)
     x_month, w_month = 0.25, 0.03
-    x_year, x_best, x_ocean, x_good, x_wind = 0.635, 0.665, 0.79, 0.825, 0.93
+    x_year, x_best, x_ocean, x_tide, x_good, x_wind = 0.635, 0.665, 0.765, 0.795, 0.84, 0.945
     y = 1 - h / 2
     for x, label, ha in [(0.0, "#", "left"), (0.022, "Coast", "left"), (0.12, "Area", "left"),
                          (x_year, "Year", "center"), (x_best, "Best 3 months", "left"),
-                         (x_ocean, "Ocean good+", "center"), (x_good, f"Typical {std['noun']} morning", "left"),
+                         (x_ocean, "Ocean good+", "center"), (x_tide, "Tide range", "left"),
+                         (x_good, f"Typical {std['noun']} morning", "left"),
                          (x_wind, "Morning wind", "left")]:
         tx.text(x, y, label, fontsize=8.5, weight="bold", color=INK_2, ha=ha, va="center")
     for k, mon in enumerate("JFMAMJJASOND"):
@@ -548,6 +561,7 @@ def _region_table(fig, rect, rows, std):
             tx.text(x_year, y, "pending", fontsize=8, color=INK_3, ha="center", va="center")
         good = (f"{r['hs'] * rating.FT:.0f} ft @ {r['tp']:.0f} s {_compass(r['dir'], degrees=False)}"
                 if np.isfinite(r["hs"]) else "\u2013")
+        tx.text(x_tide, y, _tide_text(r["name"]), fontsize=8.5, color=INK_2, va="center")
         tx.text(x_good, y, good, fontsize=8.5, color=INK_2, va="center")
         tx.text(x_wind, y, _wind_text(r["wind"]) or "\u2013", fontsize=8.5, color=INK_2, va="center")
 
@@ -561,7 +575,7 @@ def _region_footer(fig, rows, std):
                 f"total wave height @ {'dominant' if std['peak'] else 'mean'} period and the direction waves come from.")
              + pending,
              fontsize=7.5, color=INK_2, va="top")
-    fig.text(0.02, 0.033, f"Coasts are ranked by year-round {std['noun']} %. " + WIND_NOTE +
+    fig.text(0.02, 0.033, f"Coasts are ranked by year-round {std['noun']} %. " + TIDE_NOTE + " " + WIND_NOTE +
              " Neither standard uses wind; check it before paddling out.",
              fontsize=7.5, color=INK_3, va="top")
 
