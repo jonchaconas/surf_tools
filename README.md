@@ -131,8 +131,9 @@ Breakout tables are listed by year-round consistency.
   waves) in feet and seconds once zoomed in. Click one for the swell and wind-wave split, all
   waves, wind, water and air, and the last day's heights. [`surfmap/livebuoys.py`](surfmap/livebuoys.py)
   fetches them; [`.github/workflows/buoys.yml`](.github/workflows/buoys.yml) refreshes them hourly.
-- **Opening view:** a bare link opens on the forecast at the marked break nearest you (the browser
-  asks for your location), else at your first saved spot. Clicking a forecast square moves the
+- **Opening view:** a bare link opens on the forecast at the marked break nearest you, from a rough
+  location by your IP address (GeoJS, else ipinfo.io or ipwho.is; no prompt, though those services
+  see the address), else at your first saved spot. Clicking a forecast square moves the
   forecast map to that moment.
 - **Units:** °F or °C, feet or metres, knots, mph or km/h (°F, ft and kt to start), kept in your
   browser.

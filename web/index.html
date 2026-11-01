@@ -1660,20 +1660,38 @@ function buoyHtml(b) {
     <dl class="facts">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     <p class="note"><a href="https://www.ndbc.noaa.gov/station_page.php?station=${encodeURIComponent(b.id)}" target="_blank" rel="noopener">NDBC station page</a> · readings as of ${esc(buoysAt)}, refreshed hourly</p>`;
 }
-// A visit with nothing in the link opens on the forecast at the nearest marked break to the viewer
-// (the browser asks for the location), else at their first saved spot, else on the whole world.
+// A visit with nothing in the link opens on the forecast at the marked break nearest the viewer, by
+// a rough location from their IP address (no prompt; these free services see the address, as any
+// site does), else at their first saved spot, else on the whole world.
 const FRESH = !location.hash.slice(1);
-function startHere() {
+const WHERE = [
+  ["https://get.geojs.io/v1/ip/geo.json", d => [+d.latitude, +d.longitude]],
+  ["https://ipinfo.io/json", d => (d.loc || "").split(",").map(Number)],
+  ["https://ipwho.is/", d => [d.latitude, d.longitude]],
+];
+async function roughLocation() {
+  for (const [url, pick] of WHERE) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) continue;
+      const [lat, lon] = pick(await r.json());
+      if (isFinite(lat) && isFinite(lon) && (lat || lon)) return { lat, lon };
+    } catch {}
+  }
+  return null;
+}
+async function startHere() {
   setMapMode("forecast");
-  const go = sel => { if (!sel) return; const at = sel.type === "point" ? meta.points[sel.i] : sel; select(sel); zoomTo(at.lon, at.lat, 8); };
-  const saved = () => go(favs.map(fromKey).find(Boolean));
-  if (!navigator.geolocation) return saved();
-  navigator.geolocation.getCurrentPosition(pos => {
-    const here = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+  const here = await roughLocation();
+  let sel = favs.map(fromKey).find(Boolean) || null;
+  if (here) {
     let best = -1, bd = Infinity;
     meta.points.forEach((p, i) => { const d = km(here, p); if (d < bd) { bd = d; best = i; } });
-    go(best >= 0 ? { type: "point", i: best } : null);
-  }, saved, { enableHighAccuracy: false, timeout: 10000, maximumAge: 3600e3 });
+    if (best >= 0) sel = { type: "point", i: best };
+  }
+  if (!sel || selected) return;  // the viewer has picked something meanwhile
+  const at = sel.type === "point" ? meta.points[sel.i] : sel;
+  select(sel); zoomTo(at.lon, at.lat, 8);
 }
 function zoomTo(lon, lat, k = 8) {
   const xy = projection([lon, lat]); if (!xy) return;
