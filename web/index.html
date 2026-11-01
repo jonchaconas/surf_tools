@@ -89,7 +89,8 @@ select { font: 14px var(--body); color: var(--ink); background: var(--panel); bo
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .fc { display: grid; gap: 2px; font: 11px var(--data); margin-top: 4px; }
 .fc .hd { color: var(--muted); font-size: 10px; text-align: center; text-transform: uppercase; letter-spacing: 0.04em; }
-.fc .dy { color: var(--muted); font-size: 10px; align-self: center; white-space: nowrap; }
+.fc .dy { color: var(--muted); font-size: 10px; align-self: center; white-space: nowrap; line-height: 1.3; }
+.fc .dy b { color: var(--ink); font-weight: 600; }
 .fc .c { border-radius: 3px; padding: 2px 4px; line-height: 1.35; color: var(--ink); white-space: nowrap; overflow: hidden;
   background: color-mix(in srgb, var(--q) 65%, var(--panel)); }
 .fc .c.na { background: none; color: var(--muted); text-align: center; }
@@ -125,6 +126,7 @@ section.peek .popover, section.open .popover { display: block; }
 .facts dd { margin: 0; font-family: var(--data); font-size: 12.5px; }
 svg.bars text { font: 10px var(--data); fill: var(--muted); }
 svg.bars text.v { fill: var(--ink); }
+svg.bars text.t { font-size: 9px; }
 svg.rose { flex: none; }
 svg.rose text { font: 600 8px var(--data); fill: var(--muted); }
 
@@ -320,6 +322,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
 const FT = 3.28084, G = 9.81;
 const LEVELS = [0, 2, 5, 10, 15, 20, 30, 40, 50, 60, 80, 100];
 const COLORS = ["#d73027", "#f46d43", "#fdae61", "#fee08b", "#ffffbf", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837", "#00441b"];
+const MONTH_DAYS = [31, 28.25, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const P16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
 const PERIODS = [
@@ -644,7 +647,7 @@ function setupForecast(fc) {
     }
     rows.set(i, [...days].sort(([a], [b]) => (a < b ? -1 : 1)).slice(0, 8).map(([day, at]) => ({ day, at })));
   }
-  forecast = { generated: fc.generated, hours: (fc.hours || [meta.hour]).map(Number), rows };
+  forecast = { generated: fc.generated, hours: (fc.hours || [meta.hour]).map(Number), rows, water: fc.water || null };
 }
 // A forecast session is good by the criteria (green) or, short of that, scored on how near it comes:
 // the swell's size and period against what's needed, cut for a swell not aimed at the break, waves
@@ -694,9 +697,27 @@ function weekCells(i) {  // a marked break's forecast
   const list = forecast?.rows.get(i); if (!list) return "";
   return fcTable(meta.points[i], list, `Forecast (${forecast.generated.slice(0, 10)})`);
 }
-function fcTable(p, list, heading) {  // a row a day, a column per time of day
-  const cols = fcCols();
+function climAt(sst, iso) {  // the monthly means as a curve through mid-month, on a given day
+  const d = new Date(iso + "T12:00:00Z"), x = d.getUTCMonth() + (d.getUTCDate() - 15.5) / 30.5, a = Math.floor(x), f = x - a;
+  return sst[(a + 12) % 12] + (sst[(a + 13) % 12] - sst[(a + 12) % 12]) * f;
+}
+function waterNow(p) {  // { c, day, src, sst } from the break's own reading, or the nearest marked break's within 100 km
+  const w = forecast?.water; if (!w) return null;
+  const own = w[`${p.name}@${p.lat},${p.lon}`];
+  if (own) return { c: own[0], day: own[1], src: own[2], sst: p.sst };
+  let best = null, bd = 100;
+  meta.points.forEach(q => { const r = w[`${q.name}@${q.lat},${q.lon}`]; if (!r || !isFinite(p.lat)) return; const d = km(p, q); if (d < bd) { bd = d; best = { c: r[0], day: r[1], src: r[2], sst: q.sst, near: q.name }; } });
+  return best;
+}
+const waterOn = (w, day) => w.c + (w.sst ? climAt(w.sst, day) - climAt(w.sst, w.day) : 0);
+function fcTable(p, list, heading) {  // a row a day, a column per time of day; each day's water and wetsuit
+  const cols = fcCols(), w = waterNow(p);
   list = list.filter(d => cols.some(h => d.at[h]));
+  const dayCell = day => {
+    if (!w) return `<span class="dy">${dayLabel(day)}</span>`;
+    const c = waterOn(w, day), suit = suitFor(c);
+    return `<span class="dy" title="${esc(`${dayLabel(day)}: water about ${c.toFixed(1)} °C (${fdeg(c)} °F) · ${suit[1]}`)}">${dayLabel(day)}<br><b>${Math.round(c)}°</b> ${suit[2]}</span>`;
+  };
   const cell = (day, h) => {
     const s = list.find(d => d.day === day).at[h];
     if (!s) return `<div class="c na">–</div>`;
@@ -707,9 +728,10 @@ function fcTable(p, list, heading) {  // a row a day, a column per time of day
     return `<div class="c" style="--q:${QUALITY[q][0]}" title="${esc(`${dayLabel(day)} ${FC_NAMES[h] || h + ":00"}: ${sessionText(p, s)}`)}">${sw}<br>${wd}${kw === null ? "" : `<br><i>⚡</i>${Math.round(kw)}kJ`}</div>`;
   };
   return `<div class="note" style="margin-bottom:-2px">${heading}: swell and wind, arrows pointing where each is going; wind in knots, g for gusts; ⚡ wave energy, kJ in one wavelength per metre of crest</div>` +
-    `<div class="fc" style="grid-template-columns: 40px repeat(${cols.length}, minmax(0, 1fr))"><span></span>${cols.map(h => `<span class="hd">${FC_NAMES[h] || h + ":00"}</span>`).join("")}` +
-    list.map(({ day }) => `<span class="dy">${dayLabel(day)}</span>${cols.map(h => cell(day, h)).join("")}`).join("") + `</div>` +
-    `<div class="fckey">${QUALITY.map(([c, n]) => `<span style="--q:${c}">${n}</span>`).join("")}</div>`;
+    `<div class="fc" style="grid-template-columns: ${w ? 64 : 40}px repeat(${cols.length}, minmax(0, 1fr))"><span class="hd">${w ? "water" : ""}</span>${cols.map(h => `<span class="hd">${FC_NAMES[h] || h + ":00"}</span>`).join("")}` +
+    list.map(({ day }) => `${dayCell(day)}${cols.map(h => cell(day, h)).join("")}`).join("") + `</div>` +
+    `<div class="fckey">${QUALITY.map(([c, n]) => `<span style="--q:${c}">${n}</span>`).join("")}</div>` +
+    (w ? `<div class="note">Water ${w.c.toFixed(1)} °C (${fdeg(w.c)} °F) on ${w.day} ${w.near ? `at ${esc(w.near)}` : "here"} (${w.src === "GLSEA" ? "GLERL's Great Lakes satellite analysis" : "NOAA OISST satellite analysis"}), carried along the season's usual warming or cooling; wetsuits by Xcel's temperature guide.</div>` : "");
 }
 // ---------- plan a trip: the best spots within reach of a starting point ----------
 let trip = null;  // { name, lat, lon }
@@ -1279,9 +1301,9 @@ function placePoint(sel) {  // a clicked coast or sea judged like a break: a coa
   if (sel.type === "coast") {
     const open = R.open.subarray(sel.c * 16, sel.c * 16 + 16);
     let x = 0, y = 0; open.forEach((v, k) => { x += v * Math.sin(k * 22.5 * RAD); y += v * Math.cos(k * 22.5 * RAD); });
-    return { measure: meta.cells.enclosed[R.sources[R.src[sel.c]]] ? "waves" : "swell", open, facing: (Math.atan2(x, y) / RAD + 360) % 360 };
+    return { measure: meta.cells.enclosed[R.sources[R.src[sel.c]]] ? "waves" : "swell", open, facing: (Math.atan2(x, y) / RAD + 360) % 360, lat: sel.lat, lon: sel.lon };
   }
-  return { measure: sel.enclosed ? "waves" : "swell", facing: NaN };
+  return { measure: sel.enclosed ? "waves" : "swell", facing: NaN, lat: sel.lat, lon: sel.lon };
 }
 let chartFailed = false;
 function forecastHtml(sel) {
@@ -1578,13 +1600,14 @@ function bestMonths(shares) {
   for (let s = 0; s < 12; s++) { const v = (shares[s] + shares[(s + 1) % 12] + shares[(s + 2) % 12]) / 3; if (v > best) { best = v; at = s; } }
   return best < 0 ? "–" : `${MONTHS[at]}–${MONTHS[(at + 2) % 12]} ${Math.round(best)}%`;
 }
-function bars(shares, h = 120) {
-  const w = 340, bw = w / 12, pad = 16, months = new Set(period.months);
+function bars(shares, h = 120, sst = null) {  // with sst, a row of each month's water temperature (°C) under the months
+  const w = 340, bw = w / 12, pad = 16, months = new Set(period.months), H = sst ? h + 12 : h;
   const y = v => h - pad - (Math.min(100, v || 0) / 100) * (h - pad - 14);
-  return `<svg class="bars" viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="Share of good mornings by month">` +
+  return `<svg class="bars" viewBox="0 0 ${w} ${H}" width="100%" role="img" aria-label="Share of good mornings by month">` +
     shares.map((v, m) => `<rect x="${m * bw + 3}" y="${y(v)}" width="${bw - 6}" height="${h - pad - y(v)}" fill="${colorFor(v) || "transparent"}" opacity="${months.has(m + 1) ? 1 : 0.45}" rx="2"></rect>` +
       `<text class="v" x="${m * bw + bw / 2}" y="${y(v) - 3}" text-anchor="middle">${isFinite(v) ? Math.round(v) : ""}</text>` +
-      `<text x="${m * bw + bw / 2}" y="${h - 3}" text-anchor="middle">${MONTHS[m][0]}</text>`).join("") + `</svg>`;
+      `<text x="${m * bw + bw / 2}" y="${h - 3}" text-anchor="middle">${MONTHS[m][0]}</text>` +
+      (sst && isFinite(sst[m]) ? `<text class="t" x="${m * bw + bw / 2}" y="${H - 2}" text-anchor="middle">${Math.round(sst[m])}°</text>` : "")).join("") + `</svg>`;
 }
 let shore;  // coastal pixels right at the shoreline (index, lat, lon), for snapping to the nearest beach
 function nearestBeach(lon, lat) {
@@ -1829,14 +1852,25 @@ document.addEventListener("click", e => { if (!e.target.closest(".search")) qRes
 const EMPTY = `<h2>Selected</h2><p class="detail-empty">Click a break, any stretch of coast or any patch of ocean to see its month-by-month chart.</p>`;
 const compass = deg => P16[Math.round(deg / 22.5) % 16];
 const fdeg = c => Math.round(c * 9 / 5 + 32);
-const SUITS = [[24, "boardshorts"], [22, "rash vest or shorty"], [19, "2 mm shorty or 3/2"], [16, "3/2 full"], [13, "4/3 full"], [10, "5/4 full, boots"], [-5, "6/5 hooded, boots, gloves"]];
-function waterFacts(sst) {  // water temperature over the chosen months, and a wetsuit for the coldest of them
+// Xcel's surf temperature guide (xcelwetsuits.com/pages/temperature-guide), overlaps split in the middle:
+// [lowest °C, suit, short name]. surfmap/sst.py has the same table for the PDF.
+const SUITS = [[23, "rashguard, boardshorts", "rashie"], [21, "1–2 mm jacket, boardshorts", "jacket"], [19, "2 mm springsuit or short john", "spring"],
+  [17.5, "2 mm fullsuit, springsuit or long john", "2 mm"], [13.5, "2 mm or 3/2 fullsuit", "3/2"],
+  [12, "4/3 fullsuit, 3 mm boots, 1.5–2 mm gloves, hood or cap", "4/3"], [10.5, "4/3 hooded fullsuit, 3 mm boots, 3–4 mm gloves", "4/3 hood"],
+  [8, "5/4 hooded fullsuit, 5 mm boots and gloves", "5/4 hood"], [-5, "6/5 hooded fullsuit, 7 mm boots and mittens", "6/5 hood"]];
+const suitFor = c => SUITS.find(([f]) => c >= f);
+function waterFacts(sst, shares) {  // the water on a typical good morning in the chosen months, and a wetsuit for the colder ones
   if (!sst) return "";
-  const t = period.months.map(m => sst[m - 1]).filter(isFinite);
-  if (!t.length) return "";
-  const lo = Math.min(...t), hi = Math.max(...t), suit = SUITS.find(([f]) => lo >= f)[1];
-  const temp = Math.round(lo) === Math.round(hi) ? `${Math.round(lo)} °C (${fdeg(lo)} °F)` : `${Math.round(lo)}–${Math.round(hi)} °C (${fdeg(lo)}–${fdeg(hi)} °F)`;
-  return `<dt>Water</dt><dd>${temp} · ${suit}</dd>`;
+  const ms = period.months.filter(m => isFinite(sst[m - 1]));
+  if (!ms.length) return "";
+  // each month counts by its good mornings (share × days); with none good, every chosen month counts alike
+  let wts = ms.map(m => (shares && isFinite(shares[m - 1]) ? shares[m - 1] : 0) * MONTH_DAYS[m - 1]);
+  const good = wts.some(x => x > 0);
+  if (!good) wts = ms.map(m => MONTH_DAYS[m - 1]);
+  const order = ms.map((m, k) => [sst[m - 1], wts[k]]).sort((a, b) => a[0] - b[0]), total = d3.sum(order, x => x[1]);
+  const at = q => { let c = 0; for (const [t, x] of order) { c += x; if (c >= q * total) return t; } return order.at(-1)[0]; };
+  const typical = at(0.5), cold = at(0.1), suit = SUITS.find(([f]) => cold >= f)[1];
+  return `<dt>Water</dt><dd>about ${Math.round(typical)} °C (${fdeg(typical)} °F)${good ? " when it's good" : ""} · ${suit}</dd>`;
 }
 function nearestSst(lat, lon) {  // water temperatures from the nearest marked spot, OpenStreetMap spot or coast point
   let best = null, bd = Infinity;
@@ -1862,7 +1896,7 @@ function describe(sel) {  // what the panels show about a selection: title, badg
     pct = pointPct[i]; shares = MONTHS.map((_, m) => pointShare(i, [m + 1]));
     typ = pointTypical(i, period.months);
     facts = `<dt>Faces</dt><dd>${p.facing}°${p.window ? ` · swell window ${p.window[0]}–${p.window[1]}° (${compass(p.window[0])}–${compass(p.window[1])})` : ""}</dd>` +
-      `<dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${pointWind(i, period.months)}</dd>${waterFacts(p.sst)}` +
+      `<dt>Tide range</dt><dd>${p.tide}</dd><dt>Morning wind</dt><dd>${pointWind(i, period.months)}</dd>${waterFacts(p.sst, shares)}` +
       `<dt>Measured on</dt><dd>${p.measure === "waves" ? "total waves (no wind test)" : "either swell train"}</dd>` +
       `<dt>Waves read at</dt><dd>${p.source || "model cell"}, ${latlon(p.cell[0], p.cell[1], 2)}</dd>${checkFacts(p.check)}`;
   } else if (sel.type === "coast") {
@@ -1882,7 +1916,7 @@ function describe(sel) {  // what the panels show about a selection: title, badg
     shares = MONTHS.map((_, m) => mix(coastShare(c, [m + 1]), blend(sel.under, x => share(grid, lutFor(x), x, [m + 1]))));
     typ = typical(coastBins, s, period.months, pass, code => code >> 4, code => code & 15);
     side = rose(open);
-    facts = `<dt>Swell reaches it from</dt><dd>${exposure(open)}</dd>${waterFacts(nearestSst(sel.lat, sel.lon))}` +
+    facts = `<dt>Swell reaches it from</dt><dd>${exposure(open)}</dd>${waterFacts(nearestSst(sel.lat, sel.lon), shares)}` +
       `<dt>Waves read at</dt><dd>${meta.cells.enclosed[cell] ? "model point" : meta.res + "° model cell"} ${latlon(la, lo)}, ${Math.round(km({ lat: sel.lat, lon: sel.lon }, { lat: la, lon: lo }))} km away</dd>` +
       `<dt>Measured on</dt><dd>${meta.cells.enclosed[cell] ? "total waves" : "swell"}</dd>`;
   } else {
@@ -1894,7 +1928,8 @@ function describe(sel) {  // what the panels show about a selection: title, badg
     typ = main >= 0 ? typical(grid, main, period.months, code => lutFor(main)[code], code => code) : "–";
     facts = `<dt>Swell direction</dt><dd>any: open water</dd><dt>Measured on</dt><dd>${sel.enclosed ? "total waves" : "swell"}</dd>`;
   }
-  return { title, sub, badge, pct, shares, typ, facts, side };
+  const sst = sel.type === "point" ? meta.points[sel.i].sst : sel.type === "coast" ? nearestSst(sel.lat, sel.lon) : null;
+  return { title, sub, badge, pct, shares, typ, facts, side, sst };
 }
 function renderDetail() {
   const el = document.getElementById("detail");
@@ -1905,14 +1940,14 @@ function renderDetail() {
       : "No model data here: sea ice for much of the year, or water too small for the wave models."}</p>`;
     return;
   }
-  const { title, sub, badge, pct, shares, typ, facts, side } = describe(selected), key = keyOf(selected);
+  const { title, sub, badge, pct, shares, typ, facts, side, sst } = describe(selected), key = keyOf(selected);
   const saved = favs.includes(key), comparing = compare.includes(key);
   el.innerHTML = `<h2>Selected</h2><div class="actions"><span class="badge">${badge}</span>
       <button class="mini" id="favbtn" aria-pressed="${saved}">${saved ? "★ Saved" : "☆ Save"}</button>
       <button class="mini" id="cmpbtn" aria-pressed="${comparing}">${comparing ? "✓ Comparing" : "+ Compare"}</button></div>
     <h3>${title}</h3><div class="note" style="margin-top:-6px">${sub}</div>
     <div style="display:flex;align-items:center;gap:10px;justify-content:space-between"><div style="display:flex;align-items:baseline;gap:10px"><span class="bigpct">${isFinite(pct) ? Math.round(pct) + "%" : "–"}</span><span class="note">of ${selected.type === "point" ? hourNoun() : "mornings"} good · ${period.label}${yearsLabel()}</span></div>${side}</div>
-    ${bars(shares)}
+    ${bars(shares, 120, sst)}
     ${forecastHtml(selected)}
     <dl class="facts"><dt>Best 3 months</dt><dd>${bestMonths(shares)}</dd><dt>Typical good morning</dt><dd>${typ}</dd>${facts}</dl>`;
   document.getElementById("favbtn").onclick = () => toggleFav(key);

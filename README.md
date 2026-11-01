@@ -106,7 +106,11 @@ Breakout tables are listed by year-round consistency.
 - **Plan a trip:** pick a starting point and a reach. The best breaks within it are ranked for
   the months you chose, each with a typical good morning, the water temperature and a wetsuit.
 - **Spot details:** each break shows:
-  - the water temperature and wetsuit;
+  - the water temperature: each month's under the chart, and the typical temperature on its good
+    mornings with a wetsuit for the colder ones;
+  - in the forecast, each day's water and wetsuit: the latest satellite reading (GLERL's GLSEA in
+    the Great Lakes, NOAA OISST elsewhere) carried along the season's usual warming or cooling;
+    wetsuits follow [Xcel's temperature guide](https://xcelwetsuits.com/pages/temperature-guide);
   - its swell window;
   - a buoy check: how the model compared with the nearest wave buoy.
 - **Find and keep:** a search over breaks, surf spots and towns; ☆ Save (My spots); compare up

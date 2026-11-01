@@ -5,11 +5,13 @@ Waves: CDIP MOP's nearshore forecast in California; elsewhere Copernicus Marine'
 the break's own ~8 km cell (the same model and cell as the ten-year record) when a Copernicus login is
 available, else Open-Meteo's marine forecast. Wind: Open-Meteo's 10 m wind and gusts just offshore.
 Tide is left to the page, which has each break's tide constituents. Each day is sampled at every
-hour in config.HOURS (local solar time), dated by the local day.
+hour in config.HOURS (local solar time), dated by the local day. Water: the latest satellite reading
+at each break (water()), GLERL's GLSEA in the Great Lakes and NOAA's OISST elsewhere, for the wetsuit.
 
 Reads the break list from web/data/meta.json and writes web/data/forecast.json:
     {"generated": ISO time, "sources": {...}, "hours": [...], "points": {"name@lat,lon": {"8": [[day,
-     utc hour, hs1, tp1, dir1, hs2, tp2, dir2, hs, tp, dir, kt, wind_from, gust_kt], ...], "12": [...], ...}}}
+     utc hour, hs1, tp1, dir1, hs2, tp2, dir2, hs, tp, dir, kt, wind_from, gust_kt], ...], "12": [...], ...}},
+     "water": {"name@lat,lon": [°C, day, source]}}
 
 chart() writes the map's swell chart: the whole ocean on a 1 degree grid every CHART_STEP_H hours,
 wave height, peak period and direction from NOAA's WAVEWATCH III and 10 m wind from NCEP's GFS,
@@ -36,7 +38,9 @@ DAYS = 8
 MARINE = "https://marine-api.open-meteo.com/v1/marine"
 WEATHER = "https://api.open-meteo.com/v1/forecast"
 BATCH = 50  # locations per Open-Meteo request
+PACE = 6     # seconds between Open-Meteo requests: each location counts, and the free tier allows 600 a minute
 COASTWATCH = "https://coastwatch.pfeg.noaa.gov/erddap/griddap"
+GLERL = "https://apps.glerl.noaa.gov/erddap/griddap"
 CHART_STEP_H = 6
 CHART_FIELDS = [("hs", 0.1), ("tp", 0.1), ("dir", 2), ("kt", 0.5), ("wind_from", 2)]  # name, units per byte step
 MAP_JSON, MAP_DATA = OUT.parent / "fcmap.json", OUT.parent / "fcmap.b64.txt"
@@ -122,6 +126,7 @@ def _open_meteo(url, pts, hourly, extra=None):
             break
         body = r.json()
         out += body if isinstance(body, list) else [body]
+        time.sleep(PACE)
     return [b.get("hourly") for b in out]
 
 
@@ -185,6 +190,11 @@ def build():
         waves.update(_marine_fallback(rest))
         sources["open-meteo"] = sum(key(p) in waves for p in rest)
     wind = _wind(pts)
+    try:
+        temps = water(pts)
+    except Exception as e:  # the page falls back on the monthly means
+        print(f"  water temperature left out: {type(e).__name__}: {str(e)[:120]}", flush=True)
+        temps = {}
 
     out = {}
     for p in pts:
@@ -199,20 +209,20 @@ def build():
                 per[str(h)] = rows[:DAYS]
         if per:
             out[k] = per
-    OUT.write_text(json.dumps(dict(generated=_now().isoformat() + "Z", sources=sources, hours=list(config.HOURS), points=out),
+    OUT.write_text(json.dumps(dict(generated=_now().isoformat() + "Z", sources=sources, hours=list(config.HOURS), points=out, water=temps),
                               separators=(",", ":")))
     print(f"forecast: {len(out)} of {len(pts)} breaks; waves from {sources}; wrote {OUT}", flush=True)
 
 
-def _erddap(dataset, variables, sel):
-    """One griddap subset from CoastWatch as a loaded xarray Dataset."""
+def _erddap(dataset, variables, sel, server=COASTWATCH):
+    """One griddap subset (CoastWatch by default) as a loaded xarray Dataset."""
     import tempfile
 
     import xarray as xr
 
     from .ww3 import _quote
 
-    url = f"{COASTWATCH}/{dataset}.nc?" + ",".join(_quote(v + sel) for v in variables)
+    url = f"{server}/{dataset}.nc?" + ",".join(_quote(v + sel) for v in variables)
     for attempt in range(4):
         r = requests.get(url, timeout=900)
         if r.ok:
@@ -289,3 +299,27 @@ def _chart_basins(times):
             cube[ok, f, n] = np.clip(np.round(v[ok] / step), 0, 254)
     print(f"  enclosed seas: {len(idx)} points", flush=True)
     return dict(cells=idx, data=base64.b64encode(gzip.compress(cube.tobytes(), 9)).decode())
+
+
+def water(pts):
+    """{key: [°C, day, source]}: the latest satellite water temperature at each break, at the nearest
+    wet cell within half a degree: GLERL's GLSEA (~1.4 km) in the Great Lakes, NOAA's OISST (0.25°) elsewhere."""
+    from .points import lake_of
+
+    grids = {"OISST": _erddap("ncdcOisst21NrtAgg_LonPM180", ["sst"], "[last][0][(-89.875):1:(89.875)][(-179.875):1:(179.875)]").squeeze("zlev", drop=True)}
+    if any(lake_of(p["lat"], p["lon"]) for p in pts):
+        grids["GLSEA"] = _erddap("GLSEA_ACSPO_GCS", ["sst"], "[last][(38.87):1:(50.61)][(-92.42):1:(-75.88)]", server=GLERL)
+    out = {}
+    for p in pts:
+        src = "GLSEA" if "GLSEA" in grids and lake_of(p["lat"], p["lon"]) else "OISST"
+        g = grids[src]
+        la, lo, v = g.latitude.values, g.longitude.values, g.sst.values[0]
+        i, j = np.flatnonzero(np.abs(la - p["lat"]) <= 0.5), np.flatnonzero(np.abs((lo - p["lon"] + 180) % 360 - 180) <= 0.5)
+        box = v[np.ix_(i, j)]
+        if not np.isfinite(box).any():
+            continue
+        d = np.where(np.isfinite(box), np.hypot(*np.meshgrid(lo[j] - p["lon"], la[i] - p["lat"])[::-1]), np.inf)
+        a, b = np.unravel_index(np.argmin(d), d.shape)
+        out[key(p)] = [round(float(box[a, b]), 1), str(g.time.values[0])[:10], src]
+    print(f"  water temperature at {len(out)} breaks", flush=True)
+    return out

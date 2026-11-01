@@ -17,8 +17,12 @@ PATH = config.DATA / "sst" / "sst.mon.ltm.1991-2020.nc"
 SEARCH = 0.75  # degrees: how far to look for the nearest cell with water
 
 # Wetsuit by the water temperature (deg C, at least): a common surf-shop guide.
-SUITS = [(24, "boardshorts"), (22, "rash vest or shorty"), (19, "2 mm shorty or 3/2"), (16, "3/2 full"),
-         (13, "4/3 full"), (10, "5/4 full, boots"), (-5, "6/5 hooded, boots, gloves")]
+# Xcel's surf temperature guide (xcelwetsuits.com/pages/temperature-guide), its overlapping bands split
+# at the middle of each overlap: (lowest °C, suit). web/index.html has the same table.
+SUITS = [(23, "rashguard, boardshorts"), (21, "1-2 mm jacket, boardshorts"), (19, "2 mm springsuit or short john"),
+         (17.5, "2 mm fullsuit, springsuit or long john"), (13.5, "2 mm or 3/2 fullsuit"),
+         (12, "4/3 fullsuit, 3 mm boots, 1.5-2 mm gloves, hood or cap"), (10.5, "4/3 hooded fullsuit, 3 mm boots, 3-4 mm gloves"),
+         (8, "5/4 hooded fullsuit, 5 mm boots and gloves"), (-5, "6/5 hooded fullsuit, 7 mm boots and mittens")]
 
 
 def fetch():
