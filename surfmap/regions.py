@@ -143,9 +143,9 @@ def _tally(m, facing, tp_ratio):
     hs, tm, frm = m["wave_height"], m["wave_period"], m["wave_direction"]
     with np.errstate(invalid="ignore"):
         surf = (hs >= MIN_HS) & (hs <= MAX_HS) & (tm >= MIN_PERIOD) & rating.exposed(frm, facing)
-    tp = m["swell_wave_peak_period"]
-    if np.isnan(tp).all():  # no peak period on the Great Lakes, as in inland.load
-        tp = m["swell_wave_period"] * tp_ratio
+    peak, mean = m["swell_wave_peak_period"], m["swell_wave_period"]
+    # No peak period on the Great Lakes or in Copernicus-filled years: estimate it, as in inland.load.
+    tp = np.where(np.isnan(peak) & np.isfinite(mean), mean * tp_ratio, peak)
     good = rating.is_good(m["swell_wave_height"], tp, m["wind_wave_height"]) & \
         rating.exposed(m["swell_wave_direction"], facing)
     return dict(surf=int(surf.sum()), good=int(good.sum()), n=int(np.isfinite(hs).sum()),

@@ -26,6 +26,7 @@ OUT = config.DATA / "inland"
 CHUNK = 20         # locations per request
 PER_MINUTE = 450   # weighted calls, under the free tier's 600
 PER_HOUR = 4500    # under the free tier's 5,000; the 10,000/day cap is handled by waiting on 429s
+TP_RATIO = 1.29    # median swell peak/mean period in Open-Meteo's Mediterranean data, used when none is measured
 
 GREAT_LAKES = ("Lake Superior", "Lake Michigan", "Lake Huron", "Lake Erie", "Lake Ontario")
 
@@ -186,11 +187,15 @@ def load(month):
     with np.errstate(invalid="ignore", divide="ignore"):
         ratio = np.nanmedian(np.concatenate(
             [(b["swell_wave_peak_period"] / b["swell_wave_period"]).ravel() for b in raw.values()]))
+    if not np.isfinite(ratio):  # no measured peak periods this month (e.g. all Copernicus)
+        ratio = TP_RATIO
     out = {}
     for name, b in raw.items():
-        tp, est = b["swell_wave_peak_period"], np.isnan(b["swell_wave_peak_period"]).all()
+        peak, mean = b["swell_wave_peak_period"], b["swell_wave_period"]
+        # Fill per morning: a month can mix Open-Meteo years (with peak) and Copernicus years (without).
+        missing = np.isnan(peak) & np.isfinite(mean)
         out[name] = dict(lat=b["lat"], lon=b["lon"], hs=b["swell_wave_height"],
-                         tp=b["swell_wave_period"] * ratio if est else tp,
+                         tp=np.where(missing, mean * ratio, peak),
                          dir=b["swell_wave_direction"], ws=b["wind_wave_height"],
-                         tp_ratio=ratio if est else None)
+                         tp_ratio=ratio if missing.any() else None)
     return out
