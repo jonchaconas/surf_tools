@@ -401,28 +401,31 @@ def _label_spot(r, rows, extent):
     return best
 
 
-def region_page(pdf, region, land):
-    """A regional close-up: coasts on a map, the region's surfable season, and a month-by-month table."""
-    from . import regions
-    from .analysis import month_counts
+SPLIT_ROWS = 16  # regions with more coasts than this get a map page and a separate table page
 
-    spec = regions.REGIONS[region]
-    tp_ratio = next((r for r in (month_counts(m).tp_ratio for m in range(1, 13)) if r), 1.29)
-    rows = regions.summary(region, tp_ratio)
 
+def _new_page(title, subtitle):
     fig = plt.figure(figsize=(17, 11))
     fig.patch.set_facecolor("white")
-    fig.text(0.02, 0.965, f"{region}: when and where it's surfable", fontsize=24, weight="bold", va="top")
-    fig.text(0.02, 0.925,
-             f"Surfable windswell = total wave height {regions.MIN_HS * rating.FT:.0f}–"
-             f"{regions.MAX_HS * rating.FT:.0f} ft ({regions.MIN_HS:g}–{regions.MAX_HS:g} m) with mean period "
-             f"≥ {regions.MIN_PERIOD:g} s, arriving within {config.EXPOSURE}° of the shore's facing, on the "
-             f"~{config.LOCAL_HOUR:02d}:00 sample.\nEnclosed seas rarely see groundswell, so this regional standard sits "
-             f"alongside ocean good+, the open-ocean standard used on the other pages.",
-             fontsize=11.5, color=INK_2, va="top", linespacing=1.4)
+    fig.text(0.02, 0.965, title, fontsize=24, weight="bold", va="top")
+    fig.text(0.02, 0.925, subtitle, fontsize=11.5, color=INK_2, va="top", linespacing=1.4)
+    return fig
 
+
+def _region_subtitle():
+    from . import regions
+
+    return (f"Surfable windswell = total wave height {regions.MIN_HS * rating.FT:.0f}\u2013"
+            f"{regions.MAX_HS * rating.FT:.0f} ft ({regions.MIN_HS:g}\u2013{regions.MAX_HS:g} m) with mean period "
+            f"\u2265 {regions.MIN_PERIOD:g} s, arriving within {config.EXPOSURE}\u00b0 of the shore's facing, on the "
+            f"~{config.LOCAL_HOUR:02d}:00 sample.\nEnclosed seas rarely see groundswell, so this regional standard "
+            f"sits alongside ocean good+, the open-ocean standard used on the other pages.")
+
+
+def _region_map(fig, rect, spec, rows, land):
+    """Numbered coasts, coloured by year-round surfable %."""
     lon0, lon1, lat0, lat1 = spec["extent"]
-    ax = fig.add_axes([0.02, 0.4, 0.44, 0.47], projection=ccrs.Mercator(central_longitude=(lon0 + lon1) / 2))
+    ax = fig.add_axes(rect, projection=ccrs.Mercator(central_longitude=(lon0 + lon1) / 2))
     ax.set_extent(spec["extent"], crs=PC)
     ax.set_facecolor("#f4f7fa")
     ax.add_feature(land, facecolor=LAND, edgecolor="none", zorder=2, rasterized=True)
@@ -444,9 +447,12 @@ def region_page(pdf, region, land):
             x, y, ha, va = _label_spot(r, rows, spec["extent"])
             ax.text(x, y, r["name"], fontsize=8, ha=ha, va=va, transform=PC, zorder=6, path_effects=HALO)
 
+
+def _region_season(fig, rect, rows):
+    """The region's average surfable % by calendar month."""
     months = np.array([r["months"] for r in rows])
     avg = [np.mean(months[:, k]) if np.isfinite(months[:, k]).all() else np.nan for k in range(12)]
-    bx = fig.add_axes([0.53, 0.47, 0.44, 0.36])
+    bx = fig.add_axes(rect)
     for k, v in enumerate(avg):
         if np.isfinite(v):
             bx.bar(k, v, width=0.72, color=CMAP(NORM(v)), zorder=2)
@@ -462,7 +468,9 @@ def region_page(pdf, region, land):
     bx.tick_params(axis="x", length=0, labelsize=9, colors=INK_2)
     bx.set_ylim(0, max(10, np.nanmax(avg) * 1.18) if np.isfinite(avg).any() else 10)
 
-    tx = fig.add_axes([0.02, 0.07, 0.96, 0.29])
+
+def _region_table(fig, rect, rows):
+    tx = fig.add_axes(rect)
     tx.axis("off")
     tx.set_xlim(0, 1)
     tx.set_ylim(0, 1)
@@ -487,7 +495,7 @@ def region_page(pdf, region, land):
             color = CMAP(NORM(v)) if np.isfinite(v) else NODATA
             tx.add_patch(matplotlib.patches.Rectangle((x_month + k * w_month + 0.001, y - h * 0.42),
                                                       w_month - 0.002, h * 0.84, facecolor=color, linewidth=0))
-            tx.text(x_month + (k + 0.5) * w_month, y, f"{v:.0f}" if np.isfinite(v) else "–",
+            tx.text(x_month + (k + 0.5) * w_month, y, f"{v:.0f}" if np.isfinite(v) else "\u2013",
                     fontsize=7.5, ha="center", va="center", color=_ink_on(color))
         if r["complete"]:
             best, best_pct = _peak(r["months"])
@@ -497,19 +505,51 @@ def region_page(pdf, region, land):
         else:
             tx.text(x_year, y, "pending", fontsize=8, color=INK_3, ha="center", va="center")
         good = (f"{r['hs'] * rating.FT:.0f} ft @ {r['tp']:.0f} s {_compass(r['dir'], degrees=False)}"
-                if np.isfinite(r["hs"]) else "–")
+                if np.isfinite(r["hs"]) else "\u2013")
         tx.text(x_good, y, good, fontsize=8.5, color=INK_2, va="center")
-        tx.text(x_wind, y, _wind_text(r["wind"]) or "–", fontsize=8.5, color=INK_2, va="center")
+        tx.text(x_wind, y, _wind_text(r["wind"]) or "\u2013", fontsize=8.5, color=INK_2, va="center")
 
+
+def _region_footer(fig, rows):
     pending = "" if all(r["complete"] for r in rows) else \
-        " Months marked – are still downloading (Open-Meteo free-tier quota)."
-    fig.text(0.02, 0.05, "Open-Meteo Marine (Météo-France MFWAM) at each coast's model cell, a few km "
+        " Months marked \u2013 are still downloading (Open-Meteo free-tier quota)."
+    fig.text(0.02, 0.05, "Open-Meteo Marine (M\u00e9t\u00e9o-France MFWAM) at each coast's model cell, a few km "
              "offshore. Typical surfable morning = medians over surfable mornings: total wave height @ mean period "
              "and the direction waves come from." + pending, fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.033, WIND_NOTE + " Neither standard uses wind; check it before paddling out.",
              fontsize=7.5, color=INK_3, va="top")
-    pdf.savefig(fig, dpi=220)
-    return fig
+
+
+def region_page(pdf, region, land):
+    """A regional close-up: coasts on a map, the region's surfable season, and a month-by-month table.
+    Regions with more than SPLIT_ROWS coasts get the table on a second page; returns the figure(s)."""
+    from . import regions
+    from .analysis import month_counts
+
+    spec = regions.REGIONS[region]
+    tp_ratio = next((r for r in (month_counts(m).tp_ratio for m in range(1, 13)) if r), 1.29)
+    rows = regions.summary(region, tp_ratio)
+
+    if len(rows) <= SPLIT_ROWS:
+        fig = _new_page(f"{region}: when and where it's surfable", _region_subtitle())
+        table_h = (len(rows) + 1.3) * 0.022  # the table grows with the coasts; map and chart share the rest
+        top = 0.07 + table_h + 0.045
+        _region_map(fig, [0.02, top, 0.44, 0.87 - top], spec, rows, land)
+        _region_season(fig, [0.53, top + 0.04, 0.44, 0.83 - top - 0.04], rows)
+        _region_table(fig, [0.02, 0.07, 0.96, table_h], rows)
+        _region_footer(fig, rows)
+        pdf.savefig(fig, dpi=220)
+        return fig
+
+    overview = _new_page(f"{region}: when and where it's surfable", _region_subtitle())
+    _region_map(overview, [0.02, 0.33, 0.96, 0.55], spec, rows, land)
+    _region_season(overview, [0.1, 0.06, 0.8, 0.2], rows)
+    pdf.savefig(overview, dpi=220)
+    table = _new_page(f"{region}: coast by coast", _region_subtitle())
+    _region_table(table, [0.02, 0.08, 0.96, 0.8], rows)
+    _region_footer(table, rows)
+    pdf.savefig(table, dpi=220)
+    return [overview, table]
 
 
 def build(output, preview_dir=None):
@@ -532,13 +572,18 @@ def build(output, preview_dir=None):
     pages += [(region, lambda pdf, region=region: region_page(pdf, region, land)) for region in REGIONS]
     assert pages[stretches_page - 1][0] == "Under-the-radar stretches"
     with PdfPages(output) as pdf:
-        for n, (title, render) in enumerate(pages, 1):
-            _save(render(pdf), preview_dir, n, title)
+        n = 1
+        for title, render in pages:
+            n += _save(render(pdf), preview_dir, n, title)
     print(f"wrote {output}")
 
 
-def _save(fig, preview_dir, n, title):
-    if preview_dir:
-        fig.savefig(f"{preview_dir}/page_{n:02d}.png", dpi=80)
-    plt.close(fig)
-    print(f"  page {n}: {title}", flush=True)
+def _save(figs, preview_dir, n, title):
+    """Close a rendered page (or several); returns how many pages it was."""
+    figs = figs if isinstance(figs, list) else [figs]
+    for k, fig in enumerate(figs):
+        if preview_dir:
+            fig.savefig(f"{preview_dir}/page_{n + k:02d}.png", dpi=80)
+        plt.close(fig)
+        print(f"  page {n + k}: {title}", flush=True)
+    return len(figs)
