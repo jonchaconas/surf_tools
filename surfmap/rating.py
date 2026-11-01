@@ -37,11 +37,15 @@ def exposed(swell_dir, facing):
     return diff <= config.EXPOSURE
 
 
+FT = 3.28084  # feet per metre
+
+
 def rule_text():
     return (
         f"Good+ morning: swell peak period ≥ {config.MIN_SWELL_PERIOD:g} s, "
-        f"breaking height {config.MIN_BREAKER:g}–{config.MAX_BREAKER:g} m "
-        f"(Komar–Gaughan, from swell height and period), and wind-sea height "
+        f"breaking height {config.MIN_BREAKER * FT:.0f}–{config.MAX_BREAKER * FT:.0f} ft "
+        f"({config.MIN_BREAKER:g}–{config.MAX_BREAKER:g} m, Komar–Gaughan from swell height and period), "
+        f"and wind-sea height "
         f"≤ {config.MAX_WINDSEA_RATIO:g}× swell height. "
         f"Judged on one sample near {config.LOCAL_HOUR:02d}:00 local solar time."
     )

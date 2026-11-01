@@ -124,15 +124,16 @@ def _table(fig, rect, spots, stretches, title, breakout_page):
     ax = fig.add_axes(rect)
     ax.axis("off")
     ax.text(0, 1, title, fontsize=12, weight="bold", va="top")
-    ax.text(0, 0.968, "% of mornings that are good+ with swell inside the break's\n"
-            "exposure window; best break per 100 miles of coast",
+    ax.text(0, 0.968, "% of mornings good+ with swell inside the break's exposure\n"
+            "window; best per 100 miles; then typical morning wind (GFS)",
             fontsize=8, color=INK_2, va="top", linespacing=1.3)
     top = _distinct([s for s in spots if s["basin"] is None], 15)
     y, step = 0.905, 0.0375
     for i, s in enumerate(top, 1):
         ax.text(0.0, y, f"{i}", fontsize=8.5, color=INK_3, va="top")
         ax.text(0.07, y, s["name"], fontsize=8.5, weight="bold", va="top")
-        ax.text(0.07, y - 0.017, s["region"], fontsize=7, color=INK_2, va="top")
+        ax.text(0.07, y - 0.017, " · ".join(filter(None, (s["region"], _wind_text(s["wind"])))),
+                fontsize=7, color=INK_2, va="top")
         ax.text(1.0, y, f"{s['pct']:.0f}%", fontsize=9, weight="bold", va="top", ha="right")
         y -= step
 
@@ -144,7 +145,8 @@ def _table(fig, rect, spots, stretches, title, breakout_page):
     for s in sorted(stretches, key=lambda r: -r["pct"])[:7]:
         ax.text(0.0, y, f"◆{s['num']}", fontsize=8.5, color=INK_3, va="top")
         ax.text(0.09, y, s["name"], fontsize=8.5, weight="bold", va="top")
-        ax.text(0.09, y - 0.017, s["region"], fontsize=7, color=INK_2, va="top")
+        ax.text(0.09, y - 0.017, " · ".join(filter(None, (s["region"], _wind_text(s["wind"])))),
+                fontsize=7, color=INK_2, va="top")
         ax.text(1.0, y, f"{s['pct']:.0f}%", fontsize=9, weight="bold", va="top", ha="right")
         y -= step
 
@@ -244,11 +246,17 @@ def page(pdf, m, land, breakout_page):
     return fig
 
 
-def _compass(deg):
+def _compass(deg, degrees=True):
     if np.isnan(deg):
         return "–"
     points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
-    return f"{points[int((deg + 11.25) // 22.5) % 16]} {deg:.0f}°"
+    name = points[int((deg + 11.25) // 22.5) % 16]
+    return f"{name} {deg:.0f}°" if degrees else name
+
+
+def _wind_text(w):
+    """Typical morning wind as '7 kt SSE', or '' where there is none."""
+    return f"{w[0]:.0f} kt {_compass(w[1], degrees=False)}" if w else ""
 
 
 def _ink_on(color):
@@ -279,12 +287,13 @@ def stretch_page(pdf):
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     h = 1 / (len(rows) + 1.5)
-    x_month, w_month = 0.335, 0.034
-    x_year, x_worst, x_size = x_month + 12 * w_month + 0.012, x_month + 12 * w_month + 0.062, 0.86
+    x_month, w_month = 0.30, 0.03
+    x_year, x_worst = x_month + 12 * w_month + 0.01, x_month + 12 * w_month + 0.055
+    x_swell, x_wind = 0.77, 0.915
     y = 1 - h / 2
-    for x, label, ha in [(0.0, "#", "left"), (0.025, "Stretch", "left"), (0.19, "Country", "left"),
+    for x, label, ha in [(0.0, "#", "left"), (0.025, "Stretch", "left"), (0.17, "Country", "left"),
                          (x_year + 0.02, "Year", "center"), (x_worst + 0.02, "Worst", "center"),
-                         (x_size, "Typical good morning", "left")]:
+                         (x_swell, "Typical good morning", "left"), (x_wind, "Morning wind", "left")]:
         ax.text(x, y, label, fontsize=8.5, weight="bold", color=INK_2, ha=ha, va="center")
     for k, mon in enumerate("JFMAMJJASOND"):
         ax.text(x_month + (k + 0.5) * w_month, y, mon, fontsize=8.5, weight="bold", color=INK_2,
@@ -294,7 +303,7 @@ def stretch_page(pdf):
         y -= h
         ax.text(0.0, y, f"◆{r['num']}", fontsize=8.5, color=INK_3, va="center")
         ax.text(0.025, y, r["name"], fontsize=8.5, weight="bold", va="center")
-        ax.text(0.19, y, r["region"], fontsize=8, color=INK_2, va="center")
+        ax.text(0.17, y, r["region"], fontsize=8, color=INK_2, va="center")
         vals = [monthly[m].get(r["num"], np.nan) for m in range(1, 13)]
         for k, v in enumerate(vals):
             color = CMAP(NORM(v)) if np.isfinite(v) else NODATA
@@ -304,14 +313,16 @@ def stretch_page(pdf):
                     fontsize=7.5, ha="center", va="center", color=_ink_on(color))
         ax.text(x_year + 0.02, y, f"{r['pct']:.0f}%", fontsize=9, weight="bold", ha="center", va="center")
         ax.text(x_worst + 0.02, y, f"{np.nanmin(vals):.0f}%", fontsize=8.5, ha="center", va="center")
-        ax.text(x_size, y, f"{r['hb']:.1f} m, {r['tp']:.0f} s, {_compass(r['dir'])}",
-                fontsize=8.5, color=INK_2, va="center")
+        ax.text(x_swell, y, f"{r['hs'] * rating.FT:.0f} ft @ {r['tp']:.0f} s {_compass(r['dir'], degrees=False)}"
+                f", surf ~{r['hb'] * rating.FT:.0f} ft", fontsize=8.5, color=INK_2, va="center")
+        ax.text(x_wind, y, _wind_text(r["wind"]) or "–", fontsize=8.5, color=INK_2, va="center")
 
-    fig.text(0.02, 0.05, "Month cells use the map colours (% of mornings good+). Typical good morning = breaker "
-             "height (Komar–Gaughan estimate), swell period and the direction swell comes from, as medians "
-             "over that stretch's good+ mornings.",
-             fontsize=7.5, color=INK_2, va="top")
-    fig.text(0.02, 0.033, "Each stretch is read from one WW3 cell 50–120 km offshore. The rule has no wind, "
+    fig.text(0.02, 0.06, "Month cells use the map colours (% of mornings good+). Typical good morning = medians "
+             "over that stretch's good+ mornings: swell height @ peak period and the direction it comes from, and "
+             "estimated breaking surf (Komar–Gaughan).\nMorning wind = median speed and most common direction "
+             "over all mornings of the period, NOAA GFS 10 m wind just offshore, December 2022 onward.",
+             fontsize=7.5, color=INK_2, va="top", linespacing=1.5)
+    fig.text(0.02, 0.026, "Each stretch is read from one WW3 cell 50–120 km offshore. The rule has no wind, "
              "which flatters cold, steady coasts (Chile, Peru, Namibia) and storm coasts (southern Chile, New "
              "Zealand's West Coast); check local wind and access before booking a trip.",
              fontsize=7.5, color=INK_3, va="top")

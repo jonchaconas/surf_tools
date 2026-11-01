@@ -17,7 +17,7 @@ from shapely import contains_xy
 from shapely.geometry import Point
 from shapely.ops import unary_union
 
-from . import config, inland, rating, ww3
+from . import config, inland, rating, wind, ww3
 from .spots import SPOTS
 from .stretches import STRETCHES
 
@@ -191,7 +191,7 @@ def _stretch_counts(globe):
         i, j = globe.cells[k]
         h, t, d, w = globe.hs[:, i, j], globe.tp[:, i, j], globe.frm[:, i, j], globe.ws[:, i, j]
         good = rating.is_good(h, t, w) & rating.exposed(d, facing)
-        out[name] = dict(good=int(good.sum()), n=int(rating.has_sea(h, w).sum()),
+        out[name] = dict(good=int(good.sum()), n=int(rating.has_sea(h, w).sum()), hs=h[good],
                          hb=rating.breaker_height(h[good], t[good]), tp=t[good], dir=d[good])
     return out
 
@@ -275,7 +275,7 @@ class Period:
                 continue
             good, n = sum(p[0] for p in per), sum(p[1] for p in per)
             rows.append(dict(name=name, region=region, lat=lat, lon=lon, basin=basin,
-                             pct=100 * good / max(n, 1), days=n))
+                             pct=100 * good / max(n, 1), days=n, wind=wind.typical(name, self.months)))
         return sorted(rows, key=lambda r: -r["pct"])
 
     def stretches(self):
@@ -286,10 +286,11 @@ class Period:
             if None in per:
                 continue
             good, n = sum(p["good"] for p in per), sum(p["n"] for p in per)
-            hb, tp, dr = (np.concatenate([p[k] for p in per]) for k in ("hb", "tp", "dir"))
+            hs, hb, tp, dr = (np.concatenate([p[k] for p in per]) for k in ("hs", "hb", "tp", "dir"))
+            med = lambda a: float(np.median(a)) if len(a) else np.nan
             rows.append(dict(num=num, name=name, region=region, lat=lat, lon=lon, pct=100 * good / max(n, 1),
-                             hb=np.median(hb) if len(hb) else np.nan,
-                             tp=np.median(tp) if len(tp) else np.nan, dir=_circmean(dr)))
+                             hs=med(hs), hb=med(hb), tp=med(tp), dir=_circmean(dr),
+                             wind=wind.typical(name, self.months)))
         return rows
 
     def swell_arrows(self, step=10, min_consistency=0.3):

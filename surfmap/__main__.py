@@ -16,16 +16,18 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     f = sub.add_parser("fetch", help="download WW3 and Open-Meteo data into data/")
-    f.add_argument("--source", choices=("all", "ww3", "inland"), default="all")
+    f.add_argument("--source", choices=("all", "ww3", "inland", "wind"), default="all")
     b = sub.add_parser("build", help="render one PDF page per month")
     b.add_argument("-o", "--output", default=str(config.ROOT / "surf_good_days.pdf"))
     sub.add_parser("discover", help="rewrite stretches.py: good coast far from the known breaks")
     args = p.parse_args()
 
     if args.cmd == "fetch":
-        from . import inland, ww3
+        from . import inland, wind, ww3
         if args.source in ("all", "ww3"):
             ww3.fetch()
+        if args.source in ("all", "wind"):
+            wind.fetch()
         if args.source in ("all", "inland"):
             inland.fetch()
     elif args.cmd == "discover":
