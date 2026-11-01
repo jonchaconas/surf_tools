@@ -134,7 +134,10 @@ Breakout tables are listed by year-round consistency.
 - **Opening view:** a bare link opens on the forecast at the marked break nearest you (the browser
   asks for your location), else at your first saved spot. Clicking a forecast square moves the
   forecast map to that moment.
-- **Reset:** the button at the top returns to the default view and settings (saved spots stay).
+- **Units:** °F or °C, feet or metres, knots, mph or km/h (°F, ft and kt to start), kept in your
+  browser.
+- **Reset:** the button at the top returns to the default view, settings and units (saved spots
+  stay).
 
 To make the map work in a browser, each month's mornings for the grid cells are pre-counted into
 bins of swell height × period × chop by [`surfmap/export.py`](surfmap/export.py), so any criteria
