@@ -82,6 +82,8 @@ Breakout tables are listed by year-round consistency.
   each for AM, noon and PM (plus any other chosen time). Each cell shows the swell's height and
   period with an arrow for where it's heading, and the wind in knots with gusts and its own arrow, and
   the wave energy in kJ.
+  Click a square for its full story: every swell train with its breaking height and energy, wind
+  and gusts, the tide and whether it's rising, water and wetsuit, and a ✓ or ✗ for each criterion.
   Cells run red to green: green meets your criteria; the rest score how near they come on swell
   size and period, swell direction, wind and tide. "This week" ranks the spots in view by good
   days at your chosen times, each with a strip of the eight days. Click any coast or patch of
@@ -95,8 +97,9 @@ Breakout tables are listed by year-round consistency.
 - **Forecast map:** switch the map from Historical to Forecast for the coming week's swell chart:
   wave height, peak period, wave energy (kJ in one wavelength per metre of crest, ≈ 0.98 Hs² Tp²)
   or wind, contoured in bands, with
-  arrows for where the swell or wind is heading and a time slider (▶ plays it). The marked spots
-  turn red to green by their own forecast at that time. The chart is a 1° grid every 6 hours from
+  arrows for where the swell or wind is heading and a time slider in the models' 3-hour steps (▶ plays
+  it). The marked spots
+  turn red to green by their own forecast at that time. The chart is a 1° grid every 3 hours from
   NOAA WAVEWATCH III and NCEP GFS via NOAA CoastWatch ERDDAP (`chart()` in
   [`surfmap/forecast.py`](surfmap/forecast.py)), refreshed by the daily job. WAVEWATCH III leaves
   out the Great Lakes and Hudson Bay, so the enclosed seas come from Open-Meteo's marine forecast

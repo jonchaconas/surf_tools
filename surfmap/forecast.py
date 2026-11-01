@@ -41,7 +41,7 @@ BATCH = 50  # locations per Open-Meteo request
 PACE = 6     # seconds between Open-Meteo requests: each location counts, and the free tier allows 600 a minute
 COASTWATCH = "https://coastwatch.pfeg.noaa.gov/erddap/griddap"
 GLERL = "https://apps.glerl.noaa.gov/erddap/griddap"
-CHART_STEP_H = 6
+CHART_STEP_H = 3  # GFS's own step; WAVEWATCH III is hourly
 CHART_FIELDS = [("hs", 0.1), ("tp", 0.1), ("dir", 2), ("kt", 0.5), ("wind_from", 2)]  # name, units per byte step
 MAP_JSON, MAP_DATA = OUT.parent / "fcmap.json", OUT.parent / "fcmap.b64.txt"
 
@@ -119,7 +119,7 @@ def _open_meteo(url, pts, hourly, extra=None):
                       hourly=",".join(hourly), timezone="GMT", forecast_days=DAYS, **(extra or {}))
         for attempt in range(4):
             r = requests.get(url, params=params, timeout=120)
-            if r.status_code == 429:
+            if r.status_code == 429 and "Daily" not in r.text:  # the minute's quota clears; the day's doesn't
                 time.sleep(60 * (attempt + 1))
                 continue
             r.raise_for_status()

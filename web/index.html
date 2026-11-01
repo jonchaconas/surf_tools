@@ -94,6 +94,13 @@ select { font: 14px var(--body); color: var(--ink); background: var(--panel); bo
 .fc .c { border-radius: 3px; padding: 2px 4px; line-height: 1.35; color: var(--ink); white-space: nowrap; overflow: hidden;
   background: color-mix(in srgb, var(--q) 65%, var(--panel)); }
 .fc .c.na { background: none; color: var(--muted); text-align: center; }
+.fc .c[data-h] { cursor: pointer; }
+.fc .c.on { outline: 2px solid var(--ink); outline-offset: -1px; }
+.fcinfo { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; font-size: 13px; }
+.fcinfo .qual { display: inline-block; padding: 0 6px; border-radius: 3px; background: color-mix(in srgb, var(--q) 65%, var(--panel)); font-size: 12px; }
+.fcinfo .facts { margin: 6px 0; }
+.fcinfo .tests { list-style: none; padding: 0; margin: 0; font-size: 12px; color: var(--muted); }
+.fcinfo .tests b { display: inline-block; width: 1.2em; color: var(--ink); }
 .fc i, .rg i { display: inline-block; font-style: normal; width: 1.1em; text-align: center; }
 .fckey { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 4px; }
 .fckey span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; background: var(--q); vertical-align: -1px; }
@@ -189,7 +196,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
         </div>
         <div class="legend" id="legend"></div>
         <div class="legend-labels" id="legendlabels"></div>
-        <div id="fcfoot" hidden style="margin-top:4px">Spots coloured by their forecast at that time, red to green (green is good by your criteria) · arrows show where the swell, or the wind, is heading · NOAA WAVEWATCH III and GFS, 1°</div>
+        <div id="fcfoot" hidden style="margin-top:4px">Spots coloured by their forecast at that time, red to green (green is good by your criteria) · arrows show where the swell, or the wind, is heading · NOAA WAVEWATCH III and GFS, 1°, every 3 hours</div>
         <div id="climfoot">
         <label class="row" for="minpct" style="margin-top:6px">Show spots good at least <span class="val" id="minpctv"></span><input type="range" id="minpct" min="0" max="80" step="5" value="10"></label>
         <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast &nbsp; ✶ uncharted &nbsp; · surf spot (OSM) &nbsp; ▪ coast point &nbsp; <span class="swatch" style="background:var(--nodata)"></span>no data · click anywhere</div>
@@ -710,9 +717,11 @@ function waterNow(p) {  // { c, day, src, sst } from the break's own reading, or
   return best;
 }
 const waterOn = (w, day) => w.c + (w.sst ? climAt(w.sst, day) - climAt(w.sst, w.day) : 0);
+let fcCtx = null;  // the forecast table on show: { p, list, w }, for its squares' details
 function fcTable(p, list, heading) {  // a row a day, a column per time of day; each day's water and wetsuit
   const cols = fcCols(), w = waterNow(p);
   list = list.filter(d => cols.some(h => d.at[h]));
+  fcCtx = { p, list, w };
   const dayCell = day => {
     if (!w) return `<span class="dy">${dayLabel(day)}</span>`;
     const c = waterOn(w, day), suit = suitFor(c);
@@ -725,14 +734,54 @@ function fcTable(p, list, heading) {  // a row a day, a column per time of day; 
     const sw = t ? `${arrow(t[2])}${Math.round(t[0])}ft ${Math.round(t[1])}s` : "flat";
     const wd = r[9] === 255 ? "" : `${arrow(r[10] * meta.scale[10])}${Math.round(r[9] * meta.scale[9])}${s.gust != null ? "g" + Math.round(s.gust) : ""}kt`;
     const kw = energy(p, r);
-    return `<div class="c" style="--q:${QUALITY[q][0]}" title="${esc(`${dayLabel(day)} ${FC_NAMES[h] || h + ":00"}: ${sessionText(p, s)}`)}">${sw}<br>${wd}${kw === null ? "" : `<br><i>⚡</i>${Math.round(kw)}kJ`}</div>`;
+    return `<div class="c" role="button" tabindex="0" data-day="${day}" data-h="${h}" style="--q:${QUALITY[q][0]}" title="${esc(`${dayLabel(day)} ${FC_NAMES[h] || h + ":00"}: ${sessionText(p, s)} · click for more`)}">${sw}<br>${wd}${kw === null ? "" : `<br><i>⚡</i>${Math.round(kw)}kJ`}</div>`;
   };
   return `<div class="note" style="margin-bottom:-2px">${heading}: swell and wind, arrows pointing where each is going; wind in knots, g for gusts; ⚡ wave energy, kJ in one wavelength per metre of crest</div>` +
     `<div class="fc" style="grid-template-columns: ${w ? 64 : 40}px repeat(${cols.length}, minmax(0, 1fr))"><span class="hd">${w ? "water" : ""}</span>${cols.map(h => `<span class="hd">${FC_NAMES[h] || h + ":00"}</span>`).join("")}` +
     list.map(({ day }) => `${dayCell(day)}${cols.map(h => cell(day, h)).join("")}`).join("") + `</div>` +
-    `<div class="fckey">${QUALITY.map(([c, n]) => `<span style="--q:${c}">${n}</span>`).join("")}</div>` +
+    `<div class="fckey">${QUALITY.map(([c, n]) => `<span style="--q:${c}">${n}</span>`).join("")}</div><div id="fcinfo"></div>` +
     (w ? `<div class="note">Water ${w.c.toFixed(1)} °C (${fdeg(w.c)} °F) on ${w.day} ${w.near ? `at ${esc(w.near)}` : "here"} (${w.src === "GLSEA" ? "GLERL's Great Lakes satellite analysis" : "NOAA OISST satellite analysis"}), carried along the season's usual warming or cooling; wetsuits by Xcel's temperature guide.</div>` : "");
 }
+function sessionInfo({ p, list, w }, day, h) {  // one forecast square in full: every train, the wind, tide, water and each test
+  const s = list.find(d => d.day === day)?.at[h];
+  if (!s) return "";
+  const r = s.rec, { q, t } = session(p, r), ok = v => (v ? "✓" : "✗"), deg = v => `${compass(v)} (${Math.round(v)}°)`;
+  const rows = [], tests = [];
+  const trains = p.measure === "waves" ? [["Waves", train(r, 0, 2)]] : [["Primary swell", train(r, 0, 0)], ["Secondary swell", train(r, 0, 1)], ["All waves", train(r, 0, 2)]];
+  for (const [name, x] of trains) if (x)
+    rows.push([name, `${x[0].toFixed(1)} ft at ${Math.round(x[1])} s from ${deg(x[2])} · breaking about ${Math.round(breaking(x[0], x[1]))} ft · ${Math.round(KJ(x[0] / FT, x[1]))} kJ` +
+      (name === "All waves" ? "" : ` · ${aimed(x[2], p) ? "aimed at the shore" : isFinite(p.facing) ? `${Math.round(angleOff(x[2], p.facing))}° off its facing` : "blocked from that direction"}`)]);
+  if (r[9] !== 255) {
+    const from = r[10] * meta.scale[10];
+    rows.push(["Wind", `${Math.round(r[9] * meta.scale[9])} kt${s.gust != null ? `, gusting ${Math.round(s.gust)}` : ""} from ${deg(from)}${isFinite(p.facing) ? `, ${windWord(from, p.facing)}` : ""}`]);
+  }
+  const ti = meta.morning.indexOf("tide");
+  if (p.tc && r[ti] !== 255) {
+    const now = tideHeight(p.tc, s.utc), next = tideHeight(p.tc, new Date(Date.parse(s.utc + ":00:00Z") + 3600e3).toISOString().slice(0, 13));
+    rows.push(["Tide", `${now.toFixed(1)} m, ${r[ti]}% of its range, ${next > now ? "rising" : "falling"}`]);
+  }
+  if (w) { const c = waterOn(w, day); rows.push(["Water", `${c.toFixed(1)} °C (${fdeg(c)} °F) · ${suitFor(c)[1]}`]); }
+  if (t) {
+    const [hft, tp, from] = t;
+    tests.push([p.measure === "waves" ? `Waves ≥ ${crit.lh} ft at ≥ ${crit.lt} s` : `Swell ≥ ${crit.h1} ft at ≥ ${crit.t1} s${crit.longOn ? `, or ≥ ${crit.h2} ft at ≥ ${crit.t2} s` : ""}`,
+      ok(p.measure === "waves" ? hft >= crit.lh && tp >= crit.lt : (hft >= crit.h1 && tp >= crit.t1) || (crit.longOn && hft >= crit.h2 && tp >= crit.t2))]);
+    if (crit.maxb <= 40) tests.push([`Breaking ≤ ${crit.maxb} ft`, ok(breaking(hft, tp) <= crit.maxb)]);
+    tests.push(["Aimed at the shore", ok(aimed(from, p))]);
+  } else tests.push(["Any swell", "✗"]);
+  tests.push([p.measure === "waves" ? "Wind (not judged on lakes and enclosed seas)" : `Wind ≤ ${crit.wind} kt or offshore`, p.measure === "waves" ? "–" : ok(windOk(r, 0, p.facing))]);
+  if (p.tc && (crit.tlo > 0 || crit.thi < 100)) tests.push([`Tide ${crit.tlo}–${crit.thi}% of its range`, ok(tideOk(r, 0))]);
+  return `<div class="fcinfo"><strong>${dayLabel(day)}, ${(FC_NAMES[h] || h + ":00").toLowerCase()}</strong> <span class="note">around ${h}:00 local (${s.utc.slice(11, 13)}:00 UTC)</span>` +
+    ` <span class="qual" style="--q:${QUALITY[q][0]}">${QUALITY[q][1]}</span>` +
+    `<dl class="facts">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>` +
+    `<ul class="tests">${tests.map(([k, v]) => `<li><b>${v}</b> ${k}</li>`).join("")}</ul></div>`;
+}
+document.getElementById("detail").addEventListener("click", e => {
+  const c = e.target.closest(".fc .c[data-h]"); if (!c || !fcCtx) return;
+  document.querySelectorAll("#detail .fc .c.on").forEach(x => x.classList.remove("on"));
+  c.classList.add("on");
+  document.getElementById("fcinfo").innerHTML = sessionInfo(fcCtx, c.dataset.day, +c.dataset.h);
+});
+document.getElementById("detail").addEventListener("keydown", e => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".fc .c[data-h]")) { e.preventDefault(); e.target.click(); } });
 // ---------- plan a trip: the best spots within reach of a starting point ----------
 let trip = null;  // { name, lat, lon }
 const tripKm = () => Math.round((100 * Math.pow(50, +document.getElementById("tripkm").value / 100)) / 10) * 10;  // 100-5,000 km
@@ -1085,7 +1134,7 @@ function renderField(scale) {  // bilinear samples of the raster at every output
   fctx.putImageData(fieldImg, 0, 0);
 }
 // ---------- the forecast map: a swell chart from the coming week (surfmap/forecast.py chart()) ----------
-// A 1° grid every 6 hours: wave height, peak period and direction (NOAA WAVEWATCH III) and 10 m wind
+// A 1° grid every 3 hours: wave height, peak period and direction (NOAA WAVEWATCH III) and 10 m wind
 // (GFS). Each field is contoured in bands; energy is KJ(): kJ in one wavelength per metre of crest.
 let mapMode = "climate", fcVar = "hs", fcStep = 0, swellChart = null, chartLoading = null, FF = null, PALFC = null, basemap = "plain";
 const RAD = Math.PI / 180;
@@ -1097,7 +1146,8 @@ const FC_VARS = {
 };
 function loadChart() {  // once; null if there's no chart yet
   if (!chartLoading) chartLoading = Promise.all([json("data/fcmap.json"), bytes("data/fcmap.b64.txt")]).then(async ([m, buf]) => {
-    swellChart = { ...m, data: new Uint8Array(buf), t: m.times.map(t => Date.parse(t)), at: Object.fromEntries(m.fields.map(([n], k) => [n, k])), planes: new Map() };
+    swellChart = { ...m, data: new Uint8Array(buf), t: m.times.map(t => Date.parse(t)), at: Object.fromEntries(m.fields.map(([n], k) => [n, k])), planes: new Map(), between: new Map() };
+    swellChart.stepH = (swellChart.t[1] - swellChart.t[0]) / 3600e3;  // the slider moves by the hour, fcStep in frames
     if (m.basin) {  // the Great Lakes, Hudson Bay and other enclosed seas, at the map's own points there
       const cells = m.basin.cells;
       swellChart.basin = { cells, data: new Uint8Array(await inflate(m.basin.data)), lat: cells.map(c => meta.cells.lat[c]), lon: cells.map(c => meta.cells.lon[c]) };
@@ -1106,8 +1156,26 @@ function loadChart() {  // once; null if there's no chart yet
   }).catch(() => null);
   return chartLoading;
 }
+const CIRCULAR = new Set(["dir", "wind_from"]);
+function between(t, key, make, frame) {  // a field between frames (t fractional): blended, or the nearest frame's for a direction
+  const c = swellChart;
+  if (c.between.has(key)) return c.between.get(key);
+  const name = key.split(":").pop(), k = Math.floor(t), f = t - k;
+  let v;
+  if (CIRCULAR.has(name)) v = frame(Math.round(t), name);
+  else {
+    const a = frame(k, name), b = frame(Math.min(k + 1, c.t.length - 1), name);
+    if (!a || !b) return null;
+    v = new Float32Array(a.length);
+    for (let q = 0; q < a.length; q++) v[q] = a[q] !== a[q] ? b[q] : b[q] !== b[q] ? a[q] : a[q] + (b[q] - a[q]) * f;
+  }
+  c.between.set(key, v);
+  if (c.between.size > 40) c.between.delete(c.between.keys().next().value);  // scrubbing shouldn't pile them up
+  return v;
+}
 function chartPlane(t, name) {  // one field at one time: floats, NaN over land, with the water grown two cells into the coast
   const c = swellChart, key = `${t}:${name}`;
+  if (t % 1 && name !== "power") return between(t, key, chartPlane);
   if (c.planes.has(key)) return c.planes.get(key);
   const { nlat, nlon } = c, n = nlat * nlon;
   let v;
@@ -1134,13 +1202,16 @@ function chartPlane(t, name) {  // one field at one time: floats, NaN over land,
       v = next;
     }
   }
-  c.planes.set(key, v); return v;
+  if (t % 1) { c.between.set(key, v); if (c.between.size > 40) c.between.delete(c.between.keys().next().value); }
+  else c.planes.set(key, v);
+  return v;
 }
 const BASIN_FIELDS = { hs: [0, 0.1], tp: [1, 0.1], dir: [2, 2] };
 function basinPlane(t, name) {  // an enclosed-sea field at time t, by meta cell index (NaN elsewhere)
   const c = swellChart, b = c.basin, key = `b${t}:${name}`;
   if (!b) return null;
-  if (c.planes.has(key)) return c.planes.get(key);
+  if (t % 1 && name !== "power") return between(t, key, basinPlane);
+  if (c.planes.has(key) || c.between.has(key)) return c.planes.get(key) || c.between.get(key);
   const v = new Float32Array(meta.cells.lat.length).fill(NaN), n = b.cells.length;
   if (name === "power") {
     const hs = basinPlane(t, "hs"), tp = basinPlane(t, "tp");
@@ -1149,7 +1220,7 @@ function basinPlane(t, name) {  // an enclosed-sea field at time t, by meta cell
     const [f, step] = BASIN_FIELDS[name];
     b.cells.forEach((cell, k) => { const x = b.data[(t * 3 + f) * n + k]; if (x !== 255) v[cell] = x * step; });
   } else return null;
-  c.planes.set(key, v); return v;
+  (t % 1 ? c.between : c.planes).set(key, v); return v;
 }
 function basinSample(t, name, lat, lon) {  // the nearest enclosed-sea point within ~1.5°, or NaN
   const b = swellChart.basin, v = b && basinPlane(t, name);
@@ -1222,9 +1293,10 @@ function renderLegend() {
     ll.innerHTML = ["0%", "15%", "40%", "100%"].map(t => `<span>${t}</span>`).join("");
   }
 }
+const fcTime = () => swellChart.t[0] + fcStep * swellChart.stepH * 3600e3;
 function showFcStep() {
-  document.getElementById("fcstep").value = fcStep;
-  document.getElementById("fctime").textContent = fcTimeLabel(swellChart.t[fcStep]);
+  document.getElementById("fcstep").value = Math.round(fcStep * swellChart.stepH);
+  document.getElementById("fctime").textContent = fcTimeLabel(fcTime());
   document.getElementById("fcwhat").textContent = `${FC_VARS[fcVar].name}, ${FC_VARS[fcVar].unit}`;
   document.querySelectorAll("#fcvar .chip").forEach(c => c.setAttribute("aria-pressed", c.dataset.v === fcVar));
 }
@@ -1237,8 +1309,8 @@ async function setMapMode(mode) {
     document.getElementById("fcwhat").textContent = "loading…";
     if (!(await loadChart())) { document.getElementById("fcwhat").textContent = "not available yet"; return; }
     const now = Date.now(), el = document.getElementById("fcstep");
-    el.max = swellChart.t.length - 1;
-    if (!fcStep) fcStep = Math.max(0, swellChart.t.findIndex(t => t >= now - 3 * 3600e3));
+    el.max = (swellChart.t.length - 1) * swellChart.stepH; el.step = swellChart.stepH;  // the model's own steps
+    if (!fcStep) fcStep = Math.max(0, Math.min(swellChart.t.length - 1, Math.round((now - swellChart.t[0]) / 3600e3) / swellChart.stepH));
     fcPalette(); computeChartField(); showFcStep();
   }
   renderLegend(); fieldKey = ""; draw(); saveState();
@@ -1248,12 +1320,16 @@ document.getElementById("fcvar").addEventListener("click", e => {
   const b = e.target.closest("button[data-v]"); if (!b || !swellChart) return;
   fcVar = b.dataset.v; fcPalette(); computeChartField(); showFcStep(); renderLegend(); draw(); saveState();
 });
-document.getElementById("fcstep").addEventListener("input", e => { fcStep = +e.target.value; computeChartField(); showFcStep(); draw(); });
+document.getElementById("fcstep").addEventListener("input", e => { fcStep = +e.target.value / swellChart.stepH; computeChartField(); showFcStep(); draw(); });
 let fcTimer = null;
 document.getElementById("fcplay").onclick = e => {
   if (fcTimer) { clearInterval(fcTimer); fcTimer = null; e.target.textContent = "▶"; return; }
   e.target.textContent = "❚❚";
-  fcTimer = setInterval(() => { if (!swellChart) return; fcStep = (fcStep + 1) % swellChart.t.length; computeChartField(); showFcStep(); draw(); }, 900);
+  fcTimer = setInterval(() => {  // a model step a tick
+    if (!swellChart) return;
+    const hours = Math.round(fcStep * swellChart.stepH) + swellChart.stepH, last = (swellChart.t.length - 1) * swellChart.stepH;
+    fcStep = (hours > last ? 0 : hours) / swellChart.stepH; computeChartField(); showFcStep(); draw();
+  }, 500);
 };
 function drawChartArrows(dpr) {  // a screen-spaced lattice of arrows pointing where the swell (or wind) is heading
   const name = fcVar === "wind" ? "wind_from" : "dir", gap = 46, k = transform.k, { res, nlat, nlon, cat } = R;
@@ -1319,12 +1395,12 @@ function forecastHtml(sel) {
   return fcTable(placePoint(sel), list, `Forecast (${swellChart.generated.slice(0, 10)}) from the nearest 1° cells of NOAA WAVEWATCH III, all waves together, and GFS wind`);
 }
 function fcPointQuality(i) {  // a marked spot at the chart's time: its own forecast within 2 h, else the chart there
-  const t = swellChart.t[fcStep], p = meta.points[i];
+  const t = fcTime(), p = meta.points[i];
   let best = null, bd = 2 * 3600e3;
   for (const d of forecast?.rows.get(i) || []) for (const x of Object.values(d.at)) {
     const dt = Math.abs(Date.parse(x.utc + ":00:00Z") - t); if (dt <= bd) { bd = dt; best = x.rec; }
   }
-  const rec = best || chartRec(p.lat, p.lon, fcStep, 0);
+  const rec = best || chartRec(p.lat, p.lon, Math.floor(fcStep), fcStep % 1);
   return rec[0] === 255 && rec[6] === 255 ? -1 : session(p, rec).q;
 }
 
