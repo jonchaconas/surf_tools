@@ -233,11 +233,11 @@ def page(pdf, m, land, breakout_page):
     fig.text(0.02, 0.045, rating.rule_text(), fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.028,
              "Ocean: NOAA WAVEWATCH III global model (Univ. of Hawaiʻi run, PacIOOS ERDDAP), 1° sampling. "
-             "Great Lakes, Mediterranean, Black Sea, Caspian: Open-Meteo Marine API (Météo-France MFWAM), "
-             "0.75° lakes / 1.5–2° seas. Both judged by the same open-ocean standard.",
+             "Great Lakes, Mediterranean, Black Sea, Caspian: Météo-France MFWAM via Open-Meteo and Copernicus "
+             "Marine, 0.75° lakes / 1.5–2° seas. Both judged by the same open-ocean standard.",
              fontsize=7.5, color=INK_2, va="top")
-    lakes = (f" Open-Meteo has no swell peak period on the Great Lakes; it is taken as {m.tp_ratio:.2f}× the "
-             f"mean swell period, the median ratio in the other seas." if m.tp_ratio else "")
+    lakes = (f" Where swell peak period is missing (Great Lakes, Copernicus years) it is {m.tp_ratio:.2f}× "
+             f"the mean swell period." if m.tp_ratio else "")
     fig.text(0.02, 0.011,
              "Offshore sea state only: bathymetry, sheltering, tide and wind direction at each break are not modelled. "
              "Break percentages use the nearest seaward model cell within 250 km." + lakes,
@@ -513,8 +513,8 @@ def _region_table(fig, rect, rows):
 
 def _region_footer(fig, rows):
     pending = "" if all(r["complete"] for r in rows) else \
-        " Months marked \u2013 are still downloading (Open-Meteo free-tier quota)."
-    fig.text(0.02, 0.05, "Open-Meteo Marine (M\u00e9t\u00e9o-France MFWAM) at each coast's model cell, a few km "
+        " Months marked \u2013 are still downloading."
+    fig.text(0.02, 0.05, "M\u00e9t\u00e9o-France MFWAM (via Open-Meteo and Copernicus Marine) at each coast's model cell, a few km "
              "offshore. Typical surfable morning = medians over surfable mornings: total wave height @ mean period "
              "and the direction waves come from." + pending, fontsize=7.5, color=INK_2, va="top")
     fig.text(0.02, 0.033, "Coasts are ranked by year-round surfable %. " + WIND_NOTE +
