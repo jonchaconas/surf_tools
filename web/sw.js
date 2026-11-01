@@ -2,7 +2,7 @@
 // so they're served from the cache and refreshed in the background (stale-while-revalidate); the
 // page itself and the forecast go to the network first and fall back to the cache when offline.
 const CACHE = "psa-v1";
-const FRESH = [/\/$/, /index\.html$/, /forecast\.json$/, /meta\.json$/];
+const FRESH = [/\/$/, /index\.html$/, /forecast\.json$/, /fcmap\.(json|b64\.txt)$/, /meta\.json$/];
 
 self.addEventListener("install", e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(["./"]))); });
 self.addEventListener("activate", e => {

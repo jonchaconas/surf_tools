@@ -20,7 +20,9 @@ uv run python -m surfmap export --res 2    # ~35 s; prints each file's size
 Lines like `not downloaded yet, left out: <name>` mean that point's `fetch --source points`
 download is missing. Fetch it first, or say so when you publish.
 
-Each file must stay under 16 MB; `grid.b64.txt` is the largest at ~12 MB.
+Each file must stay under 16 MB; `points*.b64.txt` (one per time of day) and `grid.b64.txt`
+are the largest, at ~13 MB. Then refresh the forecast: `uv run python -m surfmap forecast`. It
+uses Copernicus, CDIP and Open-Meteo, and the daily GitHub job does the same.
 
 ## 2. Test in a browser
 

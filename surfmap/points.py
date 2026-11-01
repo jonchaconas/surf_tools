@@ -33,6 +33,76 @@ KT = 1.943844        # knots per m/s
 _WRITE = threading.Lock()  # HDF5 is not thread-safe
 _CDS = threading.BoundedSemaphore(2)  # the CDS rejects bigger queues per dataset ("request sequentially")
 
+# MFWAM gives mean periods; surfers (and buoys) quote the peak. Calibrated on NDBC dominant periods
+# at the buoys within 60 km of a point, 2017 on: a swell train's peak runs 1.28x its Tm01 at 7-8 s
+# but only 1.08x past 15 s (a flat 1.29 made Pascuales' small forerunners 25-30 s), and the whole
+# sea's 1.13x its Tm-1,0 in the ocean but 1.33x in the Great Lakes, where the model's periods run
+# short. Enclosed seas, with no buoys here, take the lakes' figure.
+SWELL_TP = ([7.5, 10, 12, 14, 16.5], [1.28, 1.25, 1.20, 1.13, 1.08])  # (Tm01 s, peak / Tm01)
+SEA_TP, LAKE_SEA_TP = 1.13, 1.33  # peak / Tm-1,0
+MAX_TP = 22.0      # longer than buoys report; a model forerunner
+MIN_TRAIN_M = 0.2  # smaller swell partitions are model remnants, not a train to surf
+
+
+def swell_tp(tm01):
+    """A swell partition's peak period from its mean period (SWELL_TP), capped at MAX_TP."""
+    tm01 = np.asarray(tm01, float)
+    return np.minimum(tm01 * np.interp(tm01, *SWELL_TP), MAX_TP)
+
+
+def sea_tp(tm10, lake):
+    """The whole sea's peak period from its Tm-1,0, in the open ocean or (lake) a lake or enclosed sea."""
+    return np.minimum(np.asarray(tm10, float) * (LAKE_SEA_TP if lake else SEA_TP), MAX_TP)
+
+
+# Wave heights corrected to the buoys (buoys.quantile_maps()): each Great Lake by all its well-matched
+# buoys together, and an ocean break by its own nearest well-matched buoy, if it has one. Quantile
+# mapping keeps the model's day-to-day order but gives its heights the buoys' distribution, which
+# matters most in the lakes, where MFWAM under-calls 4 ft days two to three times over.
+QMAP = config.ROOT / "surfmap" / "buoy_qmap.json"  # small, and committed: the daily forecast job needs it
+LAKES = {  # (lat0, lat1, lon0, lon1); the first box that holds a point names its lake
+    "Lake Superior": (46.2, 49.1, -92.3, -84.3),
+    "Lake Michigan": (41.5, 46.1, -88.1, -84.8),
+    "Lake Huron": (43.0, 46.4, -84.8, -79.6),
+    "Lake Erie": (41.3, 42.95, -83.6, -78.8),
+    "Lake Ontario": (43.1, 44.3, -79.9, -76.0),
+}
+
+
+def lake_of(lat, lon):
+    return next((name for name, (a, b, c, d) in LAKES.items() if a <= lat <= b and c <= lon <= d), None)
+
+
+@lru_cache(maxsize=1)
+def _qmaps():
+    import json
+
+    return json.loads(QMAP.read_text()) if QMAP.exists() else {}
+
+
+def correction(lat, lon):
+    """(model quantiles, buoy quantiles, what they come from) for this point, or None."""
+    q, lake = _qmaps(), lake_of(lat, lon)
+    e = q.get("lakes", {}).get(lake) if lake else q.get("points", {}).get(f"{lat:.3f},{lon:.3f}")
+    return None if not e else (np.array(e["model"]), np.array(e["buoy"]), f"{lake} buoys" if lake else f"buoy {e['station']}")
+
+
+def corrected(hs, qm):
+    """Heights through a quantile map: interpolated within it, scaled by its end ratios beyond."""
+    m, b = qm[0] + np.arange(len(qm[0])) * 1e-6, qm[1]  # strictly increasing for np.interp
+    hs = np.asarray(hs, float)
+    out = np.interp(hs, m, b)
+    return np.where(hs > m[-1], hs * b[-1] / m[-1], np.where(hs < m[0], hs * b[0] / max(m[0], 1e-6), out))
+
+
+def trains(hs1, tm1, dir1, hs2, tm2, dir2):
+    """The two swell partitions with peak periods, partitions under MIN_TRAIN_M dropped (NaN)."""
+    out = {}
+    for n, (hs, tm, d) in (("1", (hs1, tm1, dir1)), ("2", (hs2, tm2, dir2))):
+        keep = np.asarray(hs, float) >= MIN_TRAIN_M
+        out["hs" + n], out["tp" + n], out["dir" + n] = (np.where(keep, v, np.nan) for v in (hs, swell_tp(tm), d))
+    return out
+
 
 def all_points():
     """[(kind, name, region, lat, lon, facing)] for every named break, stretch and regional coast."""
@@ -170,29 +240,31 @@ def _open(paths):
     if len(paths) == 1:
         return xr.open_dataset(paths[0])
     dims = [d for d in ("time", "valid_time") if d in xr.open_dataset(paths[0]).dims]
-    return xr.concat([xr.open_dataset(p) for p in paths], dims[0], data_vars="minimal", coords="minimal", compat="override")
+    ds = xr.concat([xr.open_dataset(p) for p in paths], dims[0], data_vars="minimal", coords="minimal", compat="override")
+    ds.attrs = xr.open_dataset(paths[-1]).attrs  # the current grid's cell, which the forecast reads, not the early 0.2° one
+    return ds
 
 
 @lru_cache(maxsize=None)
-def mornings(lat, lon, hour=config.LOCAL_HOUR):
+def mornings(lat, lon, hour=config.LOCAL_HOUR, raw=False):
     """Arrays for one point, a sample a day nearest `hour` local solar time (the morning by default),
     or None until both downloads are cached:
-    day, hs1/tp1/dir1 and hs2/tp2/dir2 (swell partitions; tp estimated from the mean period),
-    hs/tm/dir (all waves), ww (wind-sea height), kt and wind_from (ERA5 10 m wind), tide (m, EOT20), cell, source.
-    In California the waves come from CDIP's nearshore model (cdip.py) instead."""
+    day, hs1/tp1/dir1 and hs2/tp2/dir2 (swell partitions, peak period from the mean: swell_tp),
+    hs/tm/tp/dir (all waves; tm the model's Tm-1,0, tp the peak: sea_tp), ww (wind-sea height), kt and wind_from (ERA5 10 m wind), tide (m, EOT20), cell, source.
+    In California the waves come from CDIP's nearshore model (cdip.py) instead. Heights are corrected
+    to nearby buoys where there are good ones (correction()), unless raw."""
     wp, vp = _waves_path(lat, lon), _wind_path(lat, lon)
     if not (wp.exists() and vp.exists()):
         return None
-    from .inland import TP_RATIO
+    from .analysis import _basin_of
 
     with _open([_waves_path(lat, lon, True), wp]) as w:
         idx, days = _local_mornings(w.time.values, lon, 3, hour)
         g = lambda v: w[v].values[idx].astype(float)
         tide = tides.height(lat, lon, w.time.values[idx])
         out = dict(day=days, cell=tuple(w.attrs["cell"]), tide=np.full(len(days), np.nan) if tide is None else tide,
-                   hs1=g("VHM0_SW1"), tp1=g("VTM01_SW1") * TP_RATIO, dir1=g("VMDR_SW1"),
-                   hs2=g("VHM0_SW2"), tp2=g("VTM01_SW2") * TP_RATIO, dir2=g("VMDR_SW2"),
-                   hs=g("VHM0"), tm=g("VTM10"), dir=g("VMDR"), ww=g("VHM0_WW"))
+                   **trains(g("VHM0_SW1"), g("VTM01_SW1"), g("VMDR_SW1"), g("VHM0_SW2"), g("VTM01_SW2"), g("VMDR_SW2")),
+                   hs=g("VHM0"), tm=g("VTM10"), tp=sea_tp(g("VTM10"), _basin_of(lat, lon)), dir=g("VMDR"), ww=g("VHM0_WW"))
     with _open([_wind_path(lat, lon, True), vp]) as v:
         t = v["valid_time"].values if "valid_time" in v else v["time"].values
         widx, wdays = _local_mornings(t, lon, 1, hour)
@@ -222,11 +294,19 @@ def mornings(lat, lon, hour=config.LOCAL_HOUR):
     if near is not None:
         pos = np.minimum(np.searchsorted(near["day"], days), len(near["day"]) - 1)
         hit = (near["day"][pos] == days) & np.isfinite(near["hs"][pos])
-        for k in ("hs1", "tp1", "dir1", "hs2", "tp2", "dir2", "hs", "dir"):
+        for k in ("hs1", "tp1", "dir1", "hs2", "tp2", "dir2", "hs", "tp", "dir"):
             out[k] = np.where(hit, near[k][pos], out[k])
-        out["tm"] = np.where(hit, near["tp"][pos] / TP_RATIO, out["tm"])  # read back as tm * TP_RATIO
+        out["tm"] = np.where(hit, np.nan, out["tm"])  # CDIP gives the peak period only
         out["cell"] = near["cell"]
         out["source"] = f"CDIP MOP site {near['site']}, {near['depth']:.0f} m deep"
+
+    qm = None if raw else correction(lat, lon)
+    if qm is not None:  # every height by the same factor as the whole sea's
+        with np.errstate(invalid="ignore", divide="ignore"):
+            f = np.where(out["hs"] > 0, corrected(out["hs"], qm) / out["hs"], 1.0)
+        for k in ("hs", "hs1", "hs2", "ww"):
+            out[k] = out[k] * f
+        out["source"] += f", heights corrected to {qm[2]}"
     return out
 
 
@@ -258,15 +338,14 @@ def summary(lat, lon, facing, months, relaxed=False, window=None):
     the enclosed-sea standard to total waves (no wind test), as the map insets do."""
     from . import rating
     from .analysis import _circmean, _relaxed
-    from .inland import TP_RATIO
 
     m = mornings(lat, lon)
     if m is None:
         return None
     s = season(m, months)
     if relaxed:
-        good = _relaxed(s["hs"], s["tm"], TP_RATIO) & rating.exposed(s["dir"], facing)
-        hs, tp, d = s["hs"], s["tm"] * TP_RATIO, s["dir"]
+        good = _relaxed(s["hs"], s["tp"], 1.0) & rating.exposed(s["dir"], facing)
+        hs, tp, d = s["hs"], s["tp"], s["dir"]
     else:
         good = rating.break_good(s, facing, window=window)
         hs, tp, d = rating.good_swell(s, facing, window)

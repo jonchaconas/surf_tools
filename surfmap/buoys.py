@@ -355,7 +355,7 @@ def validate():
     """Compare every break-buoy and coast-buoy pair and write data/buoys/validation.json; returns the list."""
     out = []
     for kind, name, region, lat, lon, (station, buoy_name, blat, blon, _) in _pairs():
-        m, buoy = points.mornings(lat, lon), series(station)
+        m, buoy = points.mornings(lat, lon, raw=True), series(station)
         if m is None or buoy is None or len(buoy["t"]) < 2:
             print(f"  {name} / {station}: no {'model' if m is None else 'buoy'} data", flush=True)
             continue
@@ -372,6 +372,45 @@ def validate():
     _print(out)
     return out
 
+
+
+CORRECT_KM, CORRECT_R, CORRECT_N = 60, 0.75, 300  # a pair good enough to correct the model with
+PCTS = np.r_[np.arange(1, 100), 99.5]
+
+
+def quantile_maps():
+    """Write points.QMAP: model -> buoy Hs quantiles (PCTS) from the well-matched pairs, pooled per
+    Great Lake, and per ocean break from its nearest well-matched buoy. CDIP points are left alone."""
+    lakes, singles = {}, {}
+    for kind, name, region, lat, lon, (station, _, blat, blon, _) in _pairs():
+        if cdip._km(lat, lon, blat, blon) > CORRECT_KM:
+            continue
+        m, buoy = points.mornings(lat, lon, raw=True), series(station)
+        if m is None or buoy is None or len(buoy["t"]) < 2 or m["source"].startswith("CDIP"):
+            continue
+        k = _nearest(_samples(lat, lon)[3], buoy["t"])
+        ok = (k >= 0) & np.isfinite(m["hs"])
+        mm, bb = m["hs"][ok], buoy["hs"][k[ok]]
+        if len(mm) < CORRECT_N or np.corrcoef(mm, bb)[0, 1] < CORRECT_R:
+            continue
+        lake = points.lake_of(lat, lon)
+        if lake:
+            pool = lakes.setdefault(lake, {"model": [], "buoy": [], "pairs": []})
+            pool["model"].append(mm); pool["buoy"].append(bb); pool["pairs"].append(f"{name}/{station}")
+        else:
+            singles.setdefault(f"{lat:.3f},{lon:.3f}", (name, station, mm, bb))  # the nearest good buoy first
+    q = lambda a: np.round(np.maximum.accumulate(np.percentile(a, PCTS)), 3).tolist()
+    out = {"pcts": PCTS.tolist(),
+           "lakes": {lake: dict(model=q(np.concatenate(v["model"])), buoy=q(np.concatenate(v["buoy"])),
+                                n=int(sum(map(len, v["model"]))), pairs=v["pairs"]) for lake, v in lakes.items()},
+           "points": {key: dict(model=q(mm), buoy=q(bb), n=len(mm), name=name, station=station)
+                      for key, (name, station, mm, bb) in singles.items()}}
+    points.QMAP.write_text(json.dumps(out, indent=1))
+    points._qmaps.cache_clear()
+    for lake, e in out["lakes"].items():
+        print(f"  {lake}: {e['n']} mornings from {len(e['pairs'])} pairs; 4 ft model {np.interp(FT4, e['buoy'], e['model']):.2f} m reads as 1.22 m")
+    print(f"  {len(out['points'])} ocean breaks with their own buoy", flush=True)
+    return out
 
 def _print(rows):
     f = lambda v, fmt: "   -" if v is None else format(v, fmt)

@@ -5,8 +5,10 @@ description: Download any missing wave/wind data and rebuild predictive_surf_atl
 
 # Rebuild the surf PDF
 
-The PDF is `predictive_surf_atlas.pdf` at the repo root (26 pages: year-round, popular breaks,
-under-the-radar stretches, two half-years, twelve months, regional pages).
+The PDF is `predictive_surf_atlas.pdf` at the repo root. Pages: year-round; popular breaks;
+under-the-radar stretches; uncharted coast; two half-years; twelve months; regional pages
+(including California and the Baltic). It covers ten seasons (2017–2026, `config.N_SEASONS`).
+The uncharted-coast page reads `web/data/uncharted.json`, so run the atlas export first.
 
 ## 1. Data
 
@@ -16,6 +18,8 @@ cheap. Only fetch what the change needs:
 ```sh
 uv run python -m surfmap fetch --source ww3         # open-ocean waves (PacIOOS; slow server, be patient)
 uv run python -m surfmap fetch --source points      # breaks, stretches, regional coasts: Copernicus + ERA5
+uv run python -c "from surfmap import points; points.fetch(early=True)"   # their 2017-2021 years
+uv run python -m surfmap fetch --source cdip        # California nearshore (hourly)
 uv run python -m surfmap fetch --source copernicus  # enclosed-sea grids Open-Meteo hasn't delivered
 ```
 

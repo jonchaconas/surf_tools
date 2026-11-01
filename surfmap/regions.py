@@ -30,9 +30,11 @@ REGIONS = {
         ("Portage", "Indiana", 41.66, -87.17, 355, (-87.02, 41.50)),
         ("Chicago", "Illinois", 41.96, -87.60, 80, (-87.30, 42.12)),
         ("Racine", "Wisconsin", 42.74, -87.74, 90),
+        ("Grant Park", "South Milwaukee, Wisconsin", 42.912, -87.838, 95, (-88.12, 42.92)),
         ("Milwaukee", "Wisconsin", 43.06, -87.84, 90, (-88.05, 43.12)),
         ("Sheboygan", "Wisconsin", 43.75, -87.66, 90),
         ("New Buffalo", "Michigan", 41.83, -86.78, 320, (-86.50, 41.70)),
+        ("Warren Dunes", "Michigan", 41.912, -86.600, 280, (-86.35, 41.95)),
         ("St. Joseph", "Michigan", 42.11, -86.53, 280, (-86.30, 42.20)),
         ("Holland", "Michigan", 42.77, -86.25, 270),
         ("Grand Haven", "Michigan", 43.06, -86.29, 270),
@@ -150,13 +152,17 @@ REGIONS = {
         ("Ocean Beach SF", "San Francisco", 37.760, -122.512, 270),
         ("Linda Mar", "Pacifica, San Mateo", 37.595, -122.505, 290),
         ("Montara", "San Mateo", 37.545, -122.516, 265),
+        ("Waddell Creek", "Santa Cruz", 37.096, -122.277, 230),
         ("Pleasure Point", "Santa Cruz", 36.958, -121.970, 180),
         ("Steamer Lane", "Santa Cruz", 36.951, -122.026, 220),
         ("Morro Bay", "San Luis Obispo", 35.370, -120.865, 270),
         ("Pismo Beach", "San Luis Obispo", 35.140, -120.645, 240),
         ("Rincon", "Santa Barbara/Ventura", 34.374, -119.477, 230),
-        ("Ventura", "Ventura", 34.274, -119.297, 200),
-        ("Oxnard", "Ventura", 34.180, -119.240, 250),
+        ("Ventura Point", "Surfer's Point, Ventura", 34.274, -119.303, 210),
+        ("Oxnard Shores", "Oxnard, Ventura", 34.190, -119.250, 250),
+        ("Port Hueneme", "Ventura", 34.145, -119.200, 220),
+        ("County Line", "Yerba Buena Rd at PCH, Ventura/Los Angeles line", 34.052, -118.964, 200),
+        ("Zeros", "Nicholas Canyon Beach, Malibu", 34.043, -118.919, 195),
         ("Zuma", "Malibu, Los Angeles", 34.012, -118.822, 200),
         ("Malibu", "Los Angeles", 34.035, -118.678, 190),
         ("Manhattan Beach", "Los Angeles", 33.885, -118.414, 250),
@@ -231,7 +237,7 @@ def standard(region):
     return REGIONS[region].get("standard", WINDSWELL)
 
 
-def _tally(m, facing, tp_ratio, std):
+def _tally(m, facing, std):
     """Mornings meeting the region's standard ("surf") and good+ at a break ("good": either swell
     train, light or offshore wind), and what the former looked like: total sea for the windswell
     and lake standards, which don't use wind, and the qualifying swell for the ocean one."""
@@ -240,7 +246,7 @@ def _tally(m, facing, tp_ratio, std):
     if std.get("ocean"):
         surf, shown = good, rating.good_swell(m, facing)
     else:
-        tm = m["tm"] * (tp_ratio if std["peak"] else 1.0)
+        tm = m["tp"] if std["peak"] else m["tm"]
         with np.errstate(invalid="ignore"):
             surf = (hs >= std["min_hs"]) & (hs <= std["max_hs"]) & (tm >= std["min_period"]) & \
                 rating.exposed(m["dir"], facing)
@@ -249,7 +255,7 @@ def _tally(m, facing, tp_ratio, std):
                 hs=shown[0][surf], tm=shown[1][surf], dir=shown[2][surf])
 
 
-def summary(region, tp_ratio):
+def summary(region):
     """Per coast: surfable % by month (Jan..Dec, NaN while downloading), year-round surfable and
     ocean good+ %, and the median surfable morning."""
     from . import points
@@ -258,7 +264,7 @@ def summary(region, tp_ratio):
     monthly = {m: _load(region, m) for m in range(1, 13)}
     rows = []
     for k, (name, area, lat, lon, facing, *label) in enumerate(REGIONS[region]["coasts"]):
-        parts = {m: _tally(d[k], facing, tp_ratio, standard(region)) for m, d in monthly.items() if d is not None}
+        parts = {m: _tally(d[k], facing, standard(region)) for m, d in monthly.items() if d is not None}
         surf, good, n = (sum(p[f] for p in parts.values()) for f in ("surf", "good", "n"))
         hs, tm, dr = (np.concatenate([p[f] for p in parts.values()]) if parts else np.array([])
                       for f in ("hs", "tm", "dir"))
@@ -282,7 +288,7 @@ def _km(a, b):
 def best(region, n, sep_km=160):
     """Names of the region's n best coasts year-round by its own standard, at least sep_km apart."""
     chosen = []
-    for r in sorted(summary(region, inland.TP_RATIO), key=lambda r: -r["pct"]):
+    for r in sorted(summary(region), key=lambda r: -r["pct"]):
         if all(_km((r["lat"], r["lon"]), (c["lat"], c["lon"])) >= sep_km for c in chosen):
             chosen.append(r)
             if len(chosen) == n:
@@ -290,13 +296,13 @@ def best(region, n, sep_km=160):
     return tuple(c["name"] for c in chosen)
 
 
-def coast_pct(region, months, std, tp_ratio):
+def coast_pct(region, months, std):
     """{coast: (lat, lon, % of mornings meeting std)} over the given months; {} while any is downloading."""
     data = [_load(region, m) for m in months]
     if any(d is None for d in data):
         return {}
     out = {}
     for k, (name, _, lat, lon, facing, *_) in enumerate(REGIONS[region]["coasts"]):
-        parts = [_tally(d[k], facing, tp_ratio, std) for d in data]
+        parts = [_tally(d[k], facing, std) for d in data]
         out[name] = (lat, lon, 100 * sum(p["surf"] for p in parts) / max(sum(p["n"] for p in parts), 1))
     return out

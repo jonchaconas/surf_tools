@@ -145,13 +145,10 @@ MORNING = [("hs1", 0.05), ("tp1", 0.1), ("dir1", 2), ("hs2", 0.05), ("tp2", 0.1)
 
 def _records(s, tide_range):
     """points.season() arrays -> uint8 records, one row per morning."""
-    from .inland import TP_RATIO
-
     lo, hi = tide_range
     cols = []
     for key, step in MORNING:
-        v = s["tm"] * TP_RATIO if key == "tp" else \
-            s["day"].astype("datetime64[Y]").astype(int) + 1970 - 2000 if key == "year" else \
+        v = s["day"].astype("datetime64[Y]").astype(int) + 1970 - 2000 if key == "year" else \
             np.clip(100 * (s["tide"] - lo) / max(hi - lo, 0.01), 0, 100) if key == "tide" else s[key]
         q = np.round(np.asarray(v, float) / step)
         cols.append(np.where(np.isfinite(q), np.clip(q, 0, 254), 255).astype(np.uint8))
@@ -345,6 +342,58 @@ PALESTINE = {"Haifa": ("Hayfa", 32.822, 34.978), "Nazareth": ("An-Nasira", 32.70
 PALESTINE_COAST = [("'Akka", 32.927, 35.074), ("Al-Tantura", 32.607, 34.918), ("Qisarya", 32.497, 34.891), ("Umm Khalid", 32.330, 34.860),
                    ("Isdud", 31.754, 34.664), ("Al-Majdal 'Asqalan", 31.668, 34.574), ("Khan Yunis", 31.346, 34.306),
                    ("Rafah", 31.287, 34.245), ("Umm al-Rashrash", 29.557, 34.952)]
+
+
+WIND_KM = 150    # a coastal pixel takes its morning wind from the nearest wind point this close
+WIND_BINS = 16   # 2 kt bins of onshore and cross-shore wind, the last one 30 kt and up
+
+
+def _coast_wind(band):
+    """Morning wind for the map's coastal band: for every coast point and OpenStreetMap spot with an
+    ERA5 series (coastwind.py), and every marked spot, monthly counts of offshore mornings and of
+    other mornings by speed, so the page can take any wind cutoff; and for every coastal pixel, the
+    nearest such point within WIND_KM. A point's facing comes from its coastal pixel's openness.
+    Returns base64 gzip of Uint16 hist[n_points * 12 * (WIND_BINS + 2)] (offshore, bins..., all)
+    then Uint16 point[n_pixels] (65535: none), and the number of points."""
+    from scipy.spatial import cKDTree
+
+    from . import coastwind
+    from . import points as P
+    from .discover import _xyz
+
+    ptree = cKDTree(_xyz(band["lat"], band["lon"]))
+    theta = np.radians(np.arange(16) * 22.5)
+    series = []  # (lat, lon, facing, day, kt, from)
+    for lat, lon in coastwind.points():
+        path = coastwind._path(lat, lon)
+        if not path.exists():
+            continue
+        z = np.load(path)
+        keep = z["hour"] == config.LOCAL_HOUR
+        w = band["open"][ptree.query(_xyz(np.array([lat]), np.array([lon])))[1][0]] / 255.0
+        facing = np.degrees(np.arctan2((w * np.sin(theta)).sum(), (w * np.cos(theta)).sum())) % 360
+        series.append((lat, lon, facing, z["day"][keep].astype("datetime64[D]"), z["kt"][keep], z["wind_from"][keep]))
+    for _, _, lat, lon, facing in SPOTS:
+        m = P.mornings(lat, lon)
+        if m is not None:
+            series.append((lat, lon, facing, m["day"], m["kt"], m["wind_from"]))
+    hist = np.zeros((len(series), 12, WIND_BINS + 2), np.uint16)
+    month_days = {mo: P._days(mo) for mo in range(1, 13)}
+    for i, (_, _, facing, day, kt, frm) in enumerate(series):
+        month = day.astype("datetime64[M]").astype(int) % 12 + 1
+        for mo in range(1, 13):
+            sel = (month == mo) & np.isin(day, month_days[mo]) & np.isfinite(kt)
+            off = np.abs((frm[sel] - facing) % 360 - 180) <= config.OFFSHORE
+            hist[i, mo - 1, 0] = off.sum()
+            hist[i, mo - 1, 1:WIND_BINS + 1] = np.bincount(np.minimum(kt[sel][~off] // 2, WIND_BINS - 1).astype(int), minlength=WIND_BINS)
+            hist[i, mo - 1, WIND_BINS + 1] = sel.sum()
+    if series:
+        d, k = cKDTree(_xyz(np.array([s_[0] for s_ in series]), np.array([s_[1] for s_ in series]))).query(_xyz(band["lat"], band["lon"]))
+        nearest = np.where(d * 6371 <= WIND_KM, k, 65535).astype(np.uint16)
+    else:
+        nearest = np.full(len(band["lat"]), 65535, np.uint16)
+    print(f"  coast wind: {len(series)} wind points, {np.mean(nearest != 65535):.0%} of coastal pixels covered", flush=True)
+    return base64.b64encode(gzip.compress(hist.tobytes() + nearest.tobytes(), 9)).decode("ascii"), len(series)
 
 
 UNCHARTED_KM, UNCHARTED_N = 300, 20
@@ -643,6 +692,8 @@ def export(res=2):
     shore = (band["lat"][band["alpha"] == 1], band["lon"][band["alpha"] == 1])
     gaps = [[*g, sst.monthly(g[2], g[3])] for g in _coast_points(shore, charted + [(e[2], e[3]) for e in STRETCHES])]
     (OUT / "uncharted.json").write_text(json.dumps(_uncharted(samples, band), separators=(",", ":"), ensure_ascii=False))
+    wind, n_wind = _coast_wind(band)
+    (OUT / "coastwind.b64.txt").write_text(wind)
     (OUT / "coastpts.json").write_text(json.dumps(gaps, separators=(",", ":"), ensure_ascii=False))
     print(f"  coast points filling the gaps: {len(gaps)}", flush=True)
     (OUT / "raster.json").write_text(json.dumps(raster, separators=(",", ":")))
@@ -655,7 +706,7 @@ def export(res=2):
     meta = dict(
         generated=date.today().isoformat(), res=res,
         seasons={m: list(config.seasons(m)) for m in range(1, 13)}, years=years, tiles=tiles, tile=TILE,
-        hour=config.LOCAL_HOUR, hours=list(config.HOURS),
+        hour=config.LOCAL_HOUR, hours=list(config.HOURS), coastwind=dict(points=n_wind, bins=WIND_BINS),
         bins=dict(height_ft=H_BINS, period_s=T_BINS, period_start=5, clean=CLEAN),
         morning=[k for k, _ in MORNING], scale=[step for _, step in MORNING],
         offshore=config.OFFSHORE,

@@ -166,12 +166,11 @@ def _table(fig, rect, spots, stretches, title, breakout_page):
 def _inset_labels(sources, m):
     """The best coasts from each regional page (fixed across pages), with this period's % under the
     relaxed enclosed-sea standard the inset is contoured with."""
-    from . import inland, regions
+    from . import regions
 
-    ratio = m.tp_ratio or inland.TP_RATIO
     labels, seen = [], set()
     for region, n in sources:
-        values = regions.coast_pct(region, m.months, regions.LAKE, ratio)
+        values = regions.coast_pct(region, m.months, regions.LAKE)
         for name in regions.best(region, n):
             if name in values and name not in seen:
                 lat, lon, pct = values[name]
@@ -479,14 +478,14 @@ def _new_page(title, subtitle):
     return fig
 
 
-def _region_subtitle(std, tp_ratio):
+def _region_subtitle(std):
     if std.get("ocean"):  # the good+ rule in brief; the map pages' footer has it in full
         return (f"Good+ = swell \u2265 {config.MIN_SWELL_HEIGHT * rating.FT:.0f} ft over {config.MIN_SWELL_PERIOD:g} s, or "
                 f"\u2265 {config.LONG_SWELL_HEIGHT * rating.FT:.0f} ft over {config.LONG_SWELL_PERIOD:g} s; breaking under "
                 f"{config.MAX_BREAKER * rating.FT:.0f} ft; either swell train, aimed at the shore; morning wind \u2264 "
                 f"{config.MAX_WIND_KT:g} kt or offshore; on the ~{config.LOCAL_HOUR:02d}:00 sample.\nRead from "
                 f"M\u00e9t\u00e9o-France MFWAM (Copernicus Marine) at each coast's ~8 km cell, with ERA5 wind just offshore.")
-    period = (f"dominant period \u2265 {std['min_period']:g} s (taken as {tp_ratio:.2f}\u00d7 the mean period)"
+    period = (f"dominant period \u2265 {std['min_period']:g} s (the model's mean period scaled to what buoys report)"
               if std["peak"] else f"mean period \u2265 {std['min_period']:g} s")
     return (f"{std['name']} = total wave height {std['min_hs'] * rating.FT:.0f}\u2013{std['max_hs'] * rating.FT:.0f} ft "
             f"({std['min_hs']:g}\u2013{std['max_hs']:g} m) with {period}, arriving within {config.EXPOSURE}\u00b0 of "
@@ -603,15 +602,13 @@ def region_page(pdf, region, land):
     """A regional close-up: coasts on a map, the region's surfable season, and a month-by-month table.
     Regions with more than SPLIT_ROWS coasts get the table on a second page; returns the figure(s)."""
     from . import regions
-    from .analysis import month_counts
 
     spec = regions.REGIONS[region]
-    tp_ratio = next((r for r in (month_counts(m).tp_ratio for m in range(1, 13)) if r), 1.29)
     std = regions.standard(region)
-    rows = sorted(regions.summary(region, tp_ratio), key=lambda r: -r["pct"])  # ranked by year-round surfable %
+    rows = sorted(regions.summary(region), key=lambda r: -r["pct"])  # ranked by year-round surfable %
 
     if len(rows) <= SPLIT_ROWS:
-        fig = _new_page(f"{region}: when and where it's {std['noun']}", _region_subtitle(std, tp_ratio))
+        fig = _new_page(f"{region}: when and where it's {std['noun']}", _region_subtitle(std))
         table_h = (len(rows) + 1.3) * 0.022  # the table grows with the coasts; map and chart share the rest
         top = 0.07 + table_h + 0.045
         _region_map(fig, [0.02, top, 0.44, 0.87 - top], spec, rows, land)
@@ -621,11 +618,11 @@ def region_page(pdf, region, land):
         pdf.savefig(fig, dpi=220)
         return fig
 
-    overview = _new_page(f"{region}: when and where it's {std['noun']}", _region_subtitle(std, tp_ratio))
+    overview = _new_page(f"{region}: when and where it's {std['noun']}", _region_subtitle(std))
     _region_map(overview, [0.02, 0.33, 0.96, 0.55], spec, rows, land)
     _region_season(overview, [0.1, 0.06, 0.8, 0.2], rows, std)
     pdf.savefig(overview, dpi=220)
-    table = _new_page(f"{region}: coast by coast", _region_subtitle(std, tp_ratio))
+    table = _new_page(f"{region}: coast by coast", _region_subtitle(std))
     _region_table(table, [0.02, 0.08, 0.96, 0.8], rows, std)
     _region_footer(table, rows, std)
     pdf.savefig(table, dpi=220)

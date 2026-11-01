@@ -69,19 +69,38 @@ Breakout tables are listed by year-round consistency.
   - the morning wind allowed at the breaks;
   - how far off a break's facing the swell may arrive (breaks with a known swell window use it);
   - the tide, low to high, as a share of each break's own range;
-  - how much wind chop to allow out at sea.
+  - how much wind chop to allow out at sea;
+  - lakes and enclosed seas: their own minimum wave height and period (4 ft at 6 s to start),
+    judged on total waves with no wind test.
 
   The map and the lists update as you go. Presets include Jon's Criteria, small groundswell,
   longboard, shortboard, big days and lake surf.
-- **When:** any combination of months, a range of years (2017–2026), and the time of day: dawn,
-  morning, midday, afternoon or evening. Time of day applies to the marked spots, the forecast
-  and the lists; the map's colours are mornings.
-- **This week:** the coming mornings at every marked break, judged by your criteria. Sources:
+- **When:** any combination of months, a range of years (2017–2026), and a range of times of day,
+  dawn to dusk (dawn, morning, midday, afternoon, evening), each time counted as a session. Time of day
+  applies to the marked spots, the forecast and the lists; the map's colours are mornings.
+- **Forecast:** each marked break's panel has the coming week as a table, a row a day and a column
+  each for AM, noon and PM (plus any other chosen time). Each cell shows the swell's height and
+  period with an arrow for where it's heading, and the wind in knots with gusts and its own arrow, and
+  the wave energy in kJ.
+  Cells run red to green: green meets your criteria; the rest score how near they come on swell
+  size and period, swell direction, wind and tide. "This week" ranks the spots in view by good
+  days at your chosen times, each with a strip of the eight days. Click any coast or patch of
+  ocean, not just a marked break, and it gets the same table from the forecast map's grid (all
+  waves together, judged by how open that shore is to each swell direction). Sources:
   - waves: CDIP's forecast in California, Copernicus Marine (or Open-Meteo) elsewhere;
   - wind: Open-Meteo;
   - tide: computed in the page.
 
   A daily GitHub job refreshes it.
+- **Forecast map:** switch the map from Historical to Forecast for the coming week's swell chart:
+  wave height, peak period, wave energy (kJ in one wavelength per metre of crest, ≈ 0.98 Hs² Tp²)
+  or wind, contoured in bands, with
+  arrows for where the swell or wind is heading and a time slider (▶ plays it). The marked spots
+  turn red to green by their own forecast at that time. The chart is a 1° grid every 6 hours from
+  NOAA WAVEWATCH III and NCEP GFS via NOAA CoastWatch ERDDAP (`chart()` in
+  [`surfmap/forecast.py`](surfmap/forecast.py)), refreshed by the daily job.
+- **Land:** plain, a street map (CARTO, from OpenStreetMap) or satellite imagery (Sentinel-2
+  cloudless by EOX, CC BY-NC-SA 4.0) under the colours.
 - **Plan a trip:** pick a starting point and a reach. The best breaks within it are ranked for
   the months you chose, each with a typical good morning, the water temperature and a wetsuit.
 - **Spot details:** each break shows:
@@ -93,7 +112,11 @@ Breakout tables are listed by year-round consistency.
 - **Map:** it wraps across the date line, loads 1:10m coastline when zoomed in, and has a
   clickable coast point at least every ~200 km. Place names in Palestine are Arabic.
 - **Installable:** on phones the GitHub page installs as an app and caches its data for offline
-  use.
+  use. There's also an Android app,
+  [`android/predictive-surf-atlas.apk`](android/predictive-surf-atlas.apk): the same page in a
+  WebView, built by [`.github/workflows/android.yml`](.github/workflows/android.yml) whenever
+  `android/` changes. Allow installs from your browser to sideload it.
+- **Reset:** the button at the top returns to the default view and settings (saved spots stay).
 
 To make the map work in a browser, each month's mornings for the grid cells are pre-counted into
 bins of swell height × period × chop by [`surfmap/export.py`](surfmap/export.py), so any criteria
@@ -186,6 +209,13 @@ named after the nearest seaside town and written to
 | Coastlines, towns | [Natural Earth](https://www.naturalearthdata.com) | 1:50m and 1:10m |
 | Surf spots (atlas) | [OpenStreetMap](https://www.openstreetmap.org/copyright) features tagged sport=surfing, © OpenStreetMap contributors, ODbL | points |
 
+**Periods.** The models give mean periods; surfers and buoys quote the peak. Each swell train's
+peak period is its mean (Tm01) times a factor calibrated on NDBC dominant periods at the buoys
+within 60 km of a break: 1.28 at 7–8 s, falling to 1.08 past 15 s, capped at 22 s; swell trains
+under 0.2 m are dropped as model remnants. The whole sea's peak is 1.13× its Tm-1,0 in the ocean
+and 1.33× in the Great Lakes, where the model's periods run short (enclosed seas use the lakes'
+figure). See `swell_tp` and `sea_tp` in [`surfmap/points.py`](surfmap/points.py).
+
 **Seasons.** Each month uses its ten most recent complete years, back to the WAVEWATCH III
 archive's start in January 2017: January–October use 2017–2026, November–December 2017–2025.
 
@@ -270,9 +300,17 @@ points from the same model with no quota.
   2022 bathymetry. It matches CDIP in California, but elsewhere the bathymetry is too coarse
   for reefs, points and canyons, and it all but erases Puerto Escondido, the Mentawais and
   Chicama, so it stays off (`config.REFRACT`).
-- **Model bias.** The buoy check shows where the model runs high or low. For example:
-  - the US East Coast reads low and Oahu reads high;
-  - the Great Lakes under-call storms, so lake counts are probably 2–3× too low.
+- **Model bias, corrected where there are buoys.** The buoy check shows where the model runs high
+  or low: the Great Lakes under-call storms (Lake Michigan's 4 ft days read as about 3.2 ft), the US
+  East Coast reads low and Oahu high. Where the buoys are good enough (within 60 km, r ≥ 0.75, at
+  least 300 matched mornings) the marked points' wave heights are quantile-mapped to them
+  ([`buoys.quantile_maps()`](surfmap/buoys.py), applied in `points.mornings()` and the
+  forecast): each Great Lake from all its good pairs pooled, and 11 ocean breaks (Pipeline,
+  Sunset, Hanalei, Honolua, Rincón, Sebastian Inlet, Cape Hatteras, Montauk, Westport, Short
+  Sands, P-Pass) from their own buoy. The map's grid and the other breaks are uncorrected, and
+  the buoy check still compares the raw model. The maps are fitted on the same mornings they
+  correct, so treat the corrected numbers as calibrated to those buoys, not independently
+  tested.
 - **Wind at 0.25°.** ERA5 smooths local effects such as sea breezes and canyon winds.
 - **One sample a day.** Each day is judged on a single snapshot at the chosen time.
 - **Coarse enclosed-sea grids.** The map insets use coarse grids (0.75–2°). The regional

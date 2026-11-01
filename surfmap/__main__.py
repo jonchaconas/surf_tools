@@ -23,7 +23,7 @@ def main():
     b = sub.add_parser("build", help="render one PDF page per month")
     b.add_argument("-o", "--output", default=str(config.ROOT / "predictive_surf_atlas.pdf"))
     sub.add_parser("discover", help="rewrite stretches.py: good coast far from the known breaks")
-    sub.add_parser("forecast", help="write web/data/forecast.json: the coming week at every marked break")
+    sub.add_parser("forecast", help="write web/data/forecast.json (the coming week at every marked break) and the map's swell chart")
     e = sub.add_parser("export", help="write web/data/ for the interactive atlas")
     e.add_argument("--res", type=int, default=2, help="ocean grid in degrees: 2 for the shareable page, 1 locally")
     g = sub.add_parser("gui", help="run the interactive atlas locally")
@@ -57,6 +57,7 @@ def main():
     elif args.cmd == "forecast":
         from . import forecast
         forecast.build()
+        forecast.chart()
     elif args.cmd == "discover":
         from . import discover
         discover.write(discover.find())

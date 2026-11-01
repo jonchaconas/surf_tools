@@ -381,13 +381,11 @@ def transfer(lat, lon, max_k=None):
 
 def _offshore(lat, lon):
     """Copernicus swell trains at a point's mornings, before points.mornings() swaps in CDIP."""
-    from .inland import TP_RATIO
-
     with points._open([points._waves_path(lat, lon, True), points._waves_path(lat, lon)]) as w:
         idx, days = points._local_mornings(w.time.values, lon, 3)
         g = lambda v: w[v].values[idx].astype(float)
-        return dict(day=days, hs1=g("VHM0_SW1"), tp1=g("VTM01_SW1") * TP_RATIO, dir1=g("VMDR_SW1"),
-                    hs2=g("VHM0_SW2"), tp2=g("VTM01_SW2") * TP_RATIO, dir2=g("VMDR_SW2"))
+        return dict(day=days, **points.trains(g("VHM0_SW1"), g("VTM01_SW1"), g("VMDR_SW1"),
+                                              g("VHM0_SW2"), g("VTM01_SW2"), g("VMDR_SW2")))
 
 
 def _stats(s, facing):

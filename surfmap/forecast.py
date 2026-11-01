@@ -3,13 +3,19 @@ judges each one by the viewer's own criteria.
 
 Waves: CDIP MOP's nearshore forecast in California; elsewhere Copernicus Marine's MFWAM forecast at
 the break's own ~8 km cell (the same model and cell as the ten-year record) when a Copernicus login is
-available, else Open-Meteo's marine forecast. Wind: Open-Meteo's 10 m wind forecast just offshore.
+available, else Open-Meteo's marine forecast. Wind: Open-Meteo's 10 m wind and gusts just offshore.
 Tide is left to the page, which has each break's tide constituents. Each day is sampled at every
 hour in config.HOURS (local solar time), dated by the local day.
 
 Reads the break list from web/data/meta.json and writes web/data/forecast.json:
     {"generated": ISO time, "sources": {...}, "hours": [...], "points": {"name@lat,lon": {"8": [[day,
-     utc hour, hs1, tp1, dir1, hs2, tp2, dir2, hs, tp, dir, kt, wind_from], ...], "12": [...], ...}}}
+     utc hour, hs1, tp1, dir1, hs2, tp2, dir2, hs, tp, dir, kt, wind_from, gust_kt], ...], "12": [...], ...}}}
+
+chart() writes the map's swell chart: the whole ocean on a 1 degree grid every CHART_STEP_H hours,
+wave height, peak period and direction from NOAA's WAVEWATCH III and 10 m wind from NCEP's GFS,
+both from NOAA CoastWatch's ERDDAP (no login). web/data/fcmap.json describes it (times, grid, the
+fields and their steps) and web/data/fcmap.b64.txt holds it: gzip, base64, Uint8 [time][field][lat][lon],
+255 where there's no value.
 """
 
 import json
@@ -28,6 +34,10 @@ DAYS = 8
 MARINE = "https://marine-api.open-meteo.com/v1/marine"
 WEATHER = "https://api.open-meteo.com/v1/forecast"
 BATCH = 50  # locations per Open-Meteo request
+COASTWATCH = "https://coastwatch.pfeg.noaa.gov/erddap/griddap"
+CHART_STEP_H = 6
+CHART_FIELDS = [("hs", 0.1), ("tp", 0.1), ("dir", 2), ("kt", 0.5), ("wind_from", 2)]  # name, units per byte step
+MAP_JSON, MAP_DATA = OUT.parent / "fcmap.json", OUT.parent / "fcmap.b64.txt"
 
 
 def key(p):
@@ -72,17 +82,25 @@ def _copernicus(p):
     """MFWAM's forecast at the break's own cell (meta 'cell'), both swell partitions."""
     import copernicusmarine as cm
 
-    from .inland import TP_RATIO
+    from .points import corrected, correction, sea_tp, trains
 
     la, lo = p["cell"]
     ds = cm.open_dataset(dataset_id="cmems_mod_glo_wav_anfc_0.083deg_PT3H-i",
                          variables=["VHM0", "VTM10", "VMDR", "VHM0_SW1", "VTM01_SW1", "VMDR_SW1", "VHM0_SW2", "VTM01_SW2", "VMDR_SW2"],
-                         minimum_longitude=lo - 0.02, maximum_longitude=lo + 0.02, minimum_latitude=la - 0.02, maximum_latitude=la + 0.02,
-                         start_datetime=(_now() - timedelta(hours=3)).isoformat(), end_datetime=(_now() + timedelta(days=DAYS)).isoformat())
-    c = ds.sel(latitude=la, longitude=lo, method="nearest").load()
+                         minimum_longitude=lo - 0.15, maximum_longitude=lo + 0.15, minimum_latitude=la - 0.15, maximum_latitude=la + 0.15,
+                         start_datetime=(_now() - timedelta(hours=3)).isoformat(), end_datetime=(_now() + timedelta(days=DAYS)).isoformat()).load()
+    wet = np.isfinite(ds.VHM0).any("time").values  # the nearest sea cell to the record's own (which may be on the 0.2° grid)
+    d = np.where(wet, np.hypot(*np.meshgrid(ds.longitude - lo, ds.latitude - la)), np.inf)
+    j, i = np.unravel_index(np.argmin(d), d.shape)
+    c = ds.isel(latitude=j, longitude=i)
     g = lambda v: c[v].values.astype(float)
-    cols = [g("VHM0_SW1"), g("VTM01_SW1") * TP_RATIO, g("VMDR_SW1"), g("VHM0_SW2"), g("VTM01_SW2") * TP_RATIO, g("VMDR_SW2"),
-            g("VHM0"), g("VTM10") * TP_RATIO, g("VMDR")]
+    t, hs = trains(g("VHM0_SW1"), g("VTM01_SW1"), g("VMDR_SW1"), g("VHM0_SW2"), g("VTM01_SW2"), g("VMDR_SW2")), g("VHM0")
+    qm = correction(p["lat"], p["lon"])
+    if qm is not None:  # as points.mornings() corrects the record
+        with np.errstate(invalid="ignore", divide="ignore"):
+            f = np.where(hs > 0, corrected(hs, qm) / hs, 1.0)
+        t["hs1"], t["hs2"], hs = t["hs1"] * f, t["hs2"] * f, hs * f
+    cols = [t["hs1"], t["tp1"], t["dir1"], t["hs2"], t["tp2"], t["dir2"], hs, sea_tp(g("VTM10"), p["measure"] == "waves"), g("VMDR")]
     return _rows(c.time.values, p["lon"], cols, 3)
 
 
@@ -107,6 +125,8 @@ def _open_meteo(url, pts, hourly, extra=None):
 
 def _marine_fallback(pts):
     """Open-Meteo's marine forecast for points without CDIP or Copernicus waves."""
+    from .points import corrected, correction, sea_tp
+
     names = ["swell_wave_height", "swell_wave_peak_period", "swell_wave_direction", "secondary_swell_wave_height",
              "secondary_swell_wave_period", "secondary_swell_wave_direction", "wave_height", "wave_period", "wave_direction"]
     out = {}
@@ -114,7 +134,12 @@ def _marine_fallback(pts):
         if not h:
             continue
         cols = [np.array([np.nan if v is None else v for v in h[n]], float) for n in names]
-        cols[7] = cols[7] * 1.29  # mean -> peak period, as elsewhere in the repo
+        cols[7] = sea_tp(cols[7], p["measure"] == "waves")  # its mean period, scaled as MFWAM's
+        qm = correction(p["lat"], p["lon"])
+        if qm is not None:  # as points.mornings() corrects the record
+            with np.errstate(invalid="ignore", divide="ignore"):
+                f = np.where(cols[6] > 0, corrected(cols[6], qm) / cols[6], 1.0)
+            cols[0], cols[3], cols[6] = cols[0] * f, cols[3] * f, cols[6] * f
         out[key(p)] = _rows(np.array(h["time"], dtype="datetime64[m]"), p["lon"], cols, 1)
     return out
 
@@ -124,9 +149,10 @@ def _wind(pts):
 
     spots = [tuple(float(x) for x in _out(p["lat"], p["lon"], p["facing"], WIND_DEG)) for p in pts]
     out = {}
-    for p, h in zip(pts, _open_meteo(WEATHER, spots, ["wind_speed_10m", "wind_direction_10m"], dict(wind_speed_unit="kn"))):
+    names = ["wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"]
+    for p, h in zip(pts, _open_meteo(WEATHER, spots, names, dict(wind_speed_unit="kn"))):
         if h:
-            cols = [np.array([np.nan if v is None else v for v in h[n]], float) for n in ("wind_speed_10m", "wind_direction_10m")]
+            cols = [np.array([np.nan if v is None else v for v in h[n]], float) for n in names]
             out[key(p)] = _rows(np.array(h["time"], dtype="datetime64[m]"), p["lon"], cols, 1)
     return out
 
@@ -162,7 +188,7 @@ def build():
         for h in config.HOURS:
             w, v = waves.get(k, {}).get(h, {}), wind.get(k, {}).get(h, {})
             rows = [[day, utc, *[None if not np.isfinite(x) else round(float(x), 2) for x in vals],
-                     *[None if not np.isfinite(x) else round(float(x), 1) for x in v.get(day, (None, [np.nan, np.nan]))[1]]]
+                     *[None if not np.isfinite(x) else round(float(x), 1) for x in v.get(day, (None, [np.nan] * 3))[1]]]
                     for day, (utc, vals) in sorted(w.items())]
             if rows:
                 per[str(h)] = rows[:DAYS]
@@ -171,3 +197,55 @@ def build():
     OUT.write_text(json.dumps(dict(generated=_now().isoformat() + "Z", sources=sources, hours=list(config.HOURS), points=out),
                               separators=(",", ":")))
     print(f"forecast: {len(out)} of {len(pts)} breaks; waves from {sources}; wrote {OUT}", flush=True)
+
+
+def _erddap(dataset, variables, sel):
+    """One griddap subset from CoastWatch as a loaded xarray Dataset."""
+    import tempfile
+
+    import xarray as xr
+
+    from .ww3 import _quote
+
+    url = f"{COASTWATCH}/{dataset}.nc?" + ",".join(_quote(v + sel) for v in variables)
+    for attempt in range(4):
+        r = requests.get(url, timeout=900)
+        if r.ok:
+            break
+        time.sleep(60 * (attempt + 1))
+    r.raise_for_status()
+    with tempfile.NamedTemporaryFile(suffix=".nc") as f:
+        f.write(r.content)
+        f.flush()
+        with xr.open_dataset(f.name) as d:
+            return d.load()
+
+
+def chart():
+    """The coming week's swell chart for the map (see the module notes)."""
+    import base64
+    import gzip
+
+    from .points import KT
+
+    now = _now()
+    t0 = now.replace(hour=now.hour - now.hour % CHART_STEP_H)
+    stamp = f"{t0:%Y-%m-%dT%H}:00:00Z"
+    waves = _erddap("NWW3_Global_Best", ["Thgt", "Tper", "Tdir"],
+                    f"[({stamp}):{CHART_STEP_H}:last][(0.0)][(-77.5):2:(77.5)][(0.0):2:(359.5)]").squeeze("depth", drop=True)
+    wind = _erddap("NCEP_Global_Best", ["ugrd10m", "vgrd10m"], f"[({stamp}):{CHART_STEP_H // 3}:last][(77.5):2:(-77.5)][(0.0):2:(359.5)]")
+    wind = wind.sortby("latitude").sel(time=waves.time, method="nearest", tolerance=np.timedelta64(90, "m"))
+    u, v = wind.ugrd10m.values, wind.vgrd10m.values
+    fields = {"hs": waves.Thgt.values, "tp": waves.Tper.values, "dir": waves.Tdir.values % 360,
+              "kt": np.hypot(u, v) * KT, "wind_from": np.degrees(np.arctan2(-u, -v)) % 360}
+    with np.errstate(invalid="ignore"):
+        cube = np.stack([np.where(np.isfinite(fields[n]), np.clip(np.round(fields[n] / step), 0, 254), 255)
+                         for n, step in CHART_FIELDS], axis=1).astype(np.uint8)  # [time][field][lat][lon]
+    lat, lon = waves.latitude.values, waves.longitude.values
+    MAP_DATA.write_text(base64.b64encode(gzip.compress(cube.tobytes(), 9)).decode())
+    MAP_JSON.write_text(json.dumps(dict(
+        generated=now.isoformat() + "Z", sources={"waves": "NOAA WAVEWATCH III (NWW3_Global_Best)", "wind": "NCEP GFS (NCEP_Global_Best)"},
+        times=[str(np.datetime64(t, "m")) + "Z" for t in waves.time.values], lat0=float(lat[0]), lon0=float(lon[0]),
+        step=float(lat[1] - lat[0]), nlat=len(lat), nlon=len(lon), fields=CHART_FIELDS), separators=(",", ":")))
+    print(f"swell chart: {cube.shape[0]} times, {len(lat)} x {len(lon)} grid; wrote {MAP_DATA} "
+          f"({MAP_DATA.stat().st_size / 1e6:.1f} MB)", flush=True)

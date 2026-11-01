@@ -29,12 +29,12 @@ DETAIL = {
 }
 
 
-def band_hour(lon0):
-    """UTC hour nearest config.LOCAL_HOUR solar time at the band's centre longitude."""
+def band_hour(lon0, local=config.LOCAL_HOUR):
+    """UTC hour nearest `local` solar time at the band's centre longitude."""
     centre = lon0 + BAND / 2
     if centre > 180:
         centre -= 360
-    return round(config.LOCAL_HOUR - centre / 15) % 24
+    return round(local - centre / 15) % 24
 
 
 def _quote(q):
@@ -81,9 +81,13 @@ def _segments(stamps):
     return runs
 
 
-def _path(year, month, lon0, t0, region=None):
-    tag = f"_{region}" if region else ""
-    return OUT / f"{year}-{month:02d}{tag}_lon{lon0:03d}_d{t0.day:02d}.nc"
+def _tag(region=None, local=config.LOCAL_HOUR):
+    """File-name tag: a DETAIL box, and the local hour when it isn't the morning one."""
+    return (f"_{region}" if region else "") + (f"_h{local:02d}" if local != config.LOCAL_HOUR else "")
+
+
+def _path(year, month, lon0, t0, region=None, local=config.LOCAL_HOUR):
+    return OUT / f"{year}-{month:02d}{_tag(region, local)}_lon{lon0:03d}_d{t0.day:02d}.nc"
 
 
 def _url(t0, t1, lat0, lat1, lon0, lon1, stride):
@@ -94,23 +98,24 @@ def _url(t0, t1, lat0, lat1, lon0, lon1, stride):
     return f"{ERDDAP}.nc?" + ",".join(_quote(v + sel) for v in VARS)
 
 
-def _jobs():
-    """(path, url, UTC hour) for every file the configured months need."""
-    for month in config.MONTHS:
-        for year in config.seasons(month):
-            for seg in _segments(available_hours(year, month)):
-                for lon0 in range(0, 360, BAND):
-                    h = band_hour(lon0)
-                    picks = [t for t in seg if t.hour == h]
-                    if not picks:
-                        continue
-                    t0, t1 = picks[0], picks[-1]
-                    lon1 = lon0 + BAND - 0.5
-                    yield _path(year, month, lon0, t0), _url(t0, t1, -77.5, 77.5, lon0, lon1, STRIDE), h
-                    for name, (la0, la1, lo0, lo1) in DETAIL.items():
-                        a, b = max(lo0, lon0), min(lo1, lon1)
-                        if a <= b:
-                            yield _path(year, month, lon0, t0, name), _url(t0, t1, la0, la1, a, b, 1), h
+def _jobs(hours=(config.LOCAL_HOUR,)):
+    """(path, url, UTC hour) for every file the configured months need, at each local hour."""
+    for local in hours:
+        for month in config.MONTHS:
+            for year in config.seasons(month):
+                for seg in _segments(available_hours(year, month)):
+                    for lon0 in range(0, 360, BAND):
+                        h = band_hour(lon0, local)
+                        picks = [t for t in seg if t.hour == h]
+                        if not picks:
+                            continue
+                        t0, t1 = picks[0], picks[-1]
+                        lon1 = lon0 + BAND - 0.5
+                        yield _path(year, month, lon0, t0, None, local), _url(t0, t1, -77.5, 77.5, lon0, lon1, STRIDE), h
+                        for name, (la0, la1, lo0, lo1) in DETAIL.items():
+                            a, b = max(lo0, lon0), min(lo1, lon1)
+                            if a <= b:
+                                yield _path(year, month, lon0, t0, name, local), _url(t0, t1, la0, la1, a, b, 1), h
 
 
 def _expected(month, region):
@@ -118,8 +123,8 @@ def _expected(month, region):
     return [p for p, _, _ in _jobs() if p.name[5:].startswith(f"{month:02d}_{region}_")]
 
 
-def fetch(workers=4):
-    jobs = [j for j in _jobs() if not j[0].exists()]
+def fetch(workers=4, hours=(config.LOCAL_HOUR,)):
+    jobs = [j for j in _jobs(hours) if not j[0].exists()]
     print(f"WW3: {len(jobs)} files to download", flush=True)
 
     def one(job):
@@ -148,16 +153,17 @@ def _combine(bands):
     return ds.rename(latitude="lat", longitude="lon")
 
 
-def load(month, region=None):
-    """Daily morning samples for one calendar month, all its seasons: dims (day, lat, lon).
+def load(month, region=None, local=config.LOCAL_HOUR):
+    """Daily samples near `local` solar time (the morning) for one calendar month, all its seasons:
+    dims (day, lat, lon).
 
     The global 1 degree grid by default, or a DETAIL box at 0.5 degrees. Longitudes are
     converted to -180..180. Bands can differ in which days exist (outages fall on
     different UTC hours), so missing band-days are NaN. Returns None for a DETAIL box
     whose files for the month are not all downloaded yet.
     """
-    tag = f"_{region}" if region else ""
-    if region and not all(p.exists() for p in _expected(month, region)):
+    tag = _tag(region, local)
+    if region and local == config.LOCAL_HOUR and not all(p.exists() for p in _expected(month, region)):
         return None
     bands = []
     for lon0 in range(0, 360, BAND):
