@@ -15,7 +15,8 @@ from . import config, inland, rating, ww3
 # arriving within config.EXPOSURE degrees of the shore's facing.
 MIN_HS, MAX_HS, MIN_PERIOD = 0.9, 3.0, 5.0
 
-# extent (lon0, lon1, lat0, lat1); coasts are (name, area, lat, lon, facing), the point a few km offshore.
+# extent (lon0, lon1, lat0, lat1); coasts are (name, area, lat, lon, facing), the point a few km offshore,
+# optionally followed by a (lon, lat) for the map label where coasts crowd together.
 REGIONS = {
     "Greece": dict(extent=(19.0, 29.6, 34.6, 41.0), coasts=[
         ("Agios Gordios", "Corfu, west coast", 39.53, 19.76, 260),
@@ -31,15 +32,15 @@ REGIONS = {
         ("Ialysos", "Rhodes, northwest", 36.43, 28.11, 300),
     ]),
     "Lake Michigan": dict(extent=(-88.4, -85.4, 41.45, 45.0), coasts=[
-        ("Whiting", "Indiana", 41.71, -87.48, 20),
-        ("Gary", "Indiana", 41.68, -87.30, 0),
-        ("Portage", "Indiana", 41.66, -87.17, 355),
-        ("Chicago", "Illinois", 41.96, -87.60, 80),
+        ("Whiting", "Indiana", 41.71, -87.48, 20, (-87.72, 41.58)),
+        ("Gary", "Indiana", 41.68, -87.30, 0, (-87.38, 41.50)),
+        ("Portage", "Indiana", 41.66, -87.17, 355, (-87.02, 41.50)),
+        ("Chicago", "Illinois", 41.96, -87.60, 80, (-87.30, 42.12)),
         ("Racine", "Wisconsin", 42.74, -87.74, 90),
         ("Milwaukee", "Wisconsin", 43.06, -87.84, 90),
         ("Sheboygan", "Wisconsin", 43.75, -87.66, 90),
-        ("New Buffalo", "Michigan", 41.83, -86.78, 320),
-        ("St. Joseph", "Michigan", 42.11, -86.53, 280),
+        ("New Buffalo", "Michigan", 41.83, -86.78, 320, (-86.50, 41.70)),
+        ("St. Joseph", "Michigan", 42.11, -86.53, 280, (-86.30, 42.20)),
         ("Holland", "Michigan", 42.77, -86.25, 270),
         ("Grand Haven", "Michigan", 43.06, -86.29, 270),
         ("Ludington", "Michigan", 43.95, -86.50, 270),
@@ -110,14 +111,14 @@ def summary(region, tp_ratio):
 
     monthly = {m: _load(region, m) for m in range(1, 13)}
     rows = []
-    for k, (name, area, lat, lon, facing) in enumerate(REGIONS[region]["coasts"]):
+    for k, (name, area, lat, lon, facing, *label) in enumerate(REGIONS[region]["coasts"]):
         parts = {m: _tally(d[k], facing, tp_ratio) for m, d in monthly.items() if d is not None}
         surf, good, n = (sum(p[f] for p in parts.values()) for f in ("surf", "good", "n"))
         hs, tm, dr = (np.concatenate([p[f] for p in parts.values()]) if parts else np.array([])
                       for f in ("hs", "tm", "dir"))
         med = lambda a: float(np.median(a)) if len(a) else np.nan
         rows.append(dict(
-            name=name, region=area, lat=lat, lon=lon, facing=facing,
+            name=name, region=area, lat=lat, lon=lon, facing=facing, label=label[0] if label else None,
             months=[100 * parts[m]["surf"] / max(parts[m]["n"], 1) if m in parts else np.nan for m in range(1, 13)],
             pct=100 * surf / max(n, 1), ocean=100 * good / max(n, 1), complete=len(parts) == 12,
             hs=med(hs), tp=med(tm), dir=_circmean(dr), wind=wind.typical(name, tuple(range(1, 13)))))

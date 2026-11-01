@@ -377,6 +377,30 @@ def spot_page(pdf):
     return _breakout_page(pdf, "Popular breaks, month by month", subtitle, "Break", rows, notes)
 
 
+def _label_spot(r, rows, extent):
+    """Where to put a coast's name: seaward first, then the other sides, keeping clear of the
+    other markers and inside the map. Sizes are rough, in degrees of the map extent."""
+    lon0, lon1, lat0, lat1 = extent
+    gap_x, gap_y = 0.03 * (lon1 - lon0), 0.03 * (lat1 - lat0)
+    w, h = 0.0125 * (lon1 - lon0) * len(r["name"]), 0.035 * (lat1 - lat0)
+    best = None
+    for turn in (0, 180, 90, -90):
+        b = np.radians(r["facing"] + turn)
+        dx, dy = np.sin(b), np.cos(b)
+        ha = "left" if dx > 0.35 else "right" if dx < -0.35 else "center"
+        va = "bottom" if dy > 0.35 else "top" if dy < -0.35 else "center"
+        x, y = r["lon"] + dx * gap_x, r["lat"] + dy * gap_y
+        x0 = {"left": x, "right": x - w, "center": x - w / 2}[ha]
+        y0 = {"bottom": y, "top": y - h, "center": y - h / 2}[va]
+        inside = lon0 <= x0 and x0 + w <= lon1 and lat0 <= y0 and y0 + h <= lat1
+        clear = all(not (x0 - gap_x / 2 <= o["lon"] <= x0 + w + gap_x / 2 and y0 - gap_y / 2 <= o["lat"] <= y0 + h + gap_y / 2)
+                    for o in rows if o is not r)
+        best = best or (x, y, ha, va)
+        if inside and clear:
+            return x, y, ha, va
+    return best
+
+
 def region_page(pdf, region, land):
     """A regional close-up: coasts on a map, the region's surfable season, and a month-by-month table."""
     from . import regions
@@ -410,12 +434,15 @@ def region_page(pdf, region, land):
         ax.scatter([r["lon"]], [r["lat"]], s=170, c=[color], edgecolors=INK, linewidths=0.8, transform=PC, zorder=5)
         ax.text(r["lon"], r["lat"], str(i), fontsize=7.5, weight="bold", ha="center", va="center",
                 color=_ink_on(color), transform=PC, zorder=6)
-        # Label on the seaward side, so neighbouring coasts don't collide.
-        dx, dy = np.sin(np.radians(r["facing"])), np.cos(np.radians(r["facing"]))
-        ax.text(r["lon"] + dx * 0.035 * (lon1 - lon0), r["lat"] + dy * 0.035 * (lat1 - lat0), r["name"],
-                fontsize=8, ha="left" if dx > 0.35 else "right" if dx < -0.35 else "center",
-                va="bottom" if dy > 0.35 else "top" if dy < -0.35 else "center",
-                transform=PC, zorder=6, path_effects=HALO)
+        if r["label"]:  # placed by hand, with a leader line back to the marker
+            geo = PC._as_mpl_transform(ax)
+            ax.annotate(r["name"], xy=(r["lon"], r["lat"]), xytext=r["label"], xycoords=geo, textcoords=geo,
+                        fontsize=8, ha="right" if r["label"][0] < r["lon"] - 0.05 else
+                        "left" if r["label"][0] > r["lon"] + 0.05 else "center", va="center", zorder=6,
+                        path_effects=HALO, arrowprops=dict(arrowstyle="-", color=INK_3, lw=0.6, shrinkB=6))
+        else:
+            x, y, ha, va = _label_spot(r, rows, spec["extent"])
+            ax.text(x, y, r["name"], fontsize=8, ha=ha, va=va, transform=PC, zorder=6, path_effects=HALO)
 
     months = np.array([r["months"] for r in rows])
     avg = [np.mean(months[:, k]) if np.isfinite(months[:, k]).all() else np.nan for k in range(12)]
