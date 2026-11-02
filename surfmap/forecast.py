@@ -17,8 +17,10 @@ Reads the break list from web/data/meta.json and writes web/data/forecast.json:
      "water": {"name@lat,lon": [°C, day, source]}}
 
 chart() writes the map's swell chart: the whole ocean on a 1 degree grid every CHART_STEP_H hours,
-wave height, peak period and direction from NOAA's WAVEWATCH III and 10 m wind from NCEP's GFS,
-both from NOAA CoastWatch's ERDDAP (no login). web/data/fcmap.json describes it (times, grid, the
+wave height, peak period and direction from NOAA's GFS-Wave (NOMADS; WAVEWATCH III via CoastWatch if
+that fails) and 10 m wind from NCEP's GFS (CoastWatch), no login. Enclosed seas also come at their
+model's own grid (CHART_REGIONS: GLWU 0.1° for the Great Lakes, GFS-Wave 0.25° for the rest), in
+fcmap.json "regions": [{name, lat0, lon0, step, nlat, nlon, data: gzip base64 Uint8 [time][hs, tp, dir][lat][lon]}]. web/data/fcmap.json describes it (times, grid, the
 fields and their steps) and web/data/fcmap.b64.txt holds it: gzip, base64, Uint8 [time][field][lat][lon],
 255 where there's no value. WAVEWATCH III leaves out the Great Lakes and Hudson Bay, so the enclosed-sea
 points of the map (meta.json cells marked enclosed) get Open-Meteo's marine forecast as well, in
@@ -46,6 +48,19 @@ PACE = 6     # seconds between Open-Meteo requests: each location counts, and th
 COASTWATCH = "https://coastwatch.pfeg.noaa.gov/erddap/griddap"
 GLERL = "https://apps.glerl.noaa.gov/erddap/griddap"
 GLWU = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/glwu/prod"  # NOAA's Great Lakes wave model, GRIB2
+GFSWAVE = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod"  # NOAA's global wave model, GRIB2
+CHART_FRAMES = 48  # six days of 3-hour steps
+# Seas the 1° chart is too coarse for, sent at their model's own grid: (lat0, lat1, lon0, lon1, source).
+# The Black Sea and the Caspian are in neither NOAA model; they keep the enclosed-sea points (Open-Meteo).
+CHART_REGIONS = {
+    "Great Lakes": (41.0, 49.5, -92.6, -75.8, "glwu"),
+    "Mediterranean": (30.0, 46.0, -6.0, 37.0, "gfswave"),
+    "Baltic": (53.5, 66.0, 9.0, 31.0, "gfswave"),
+    "Red Sea": (12.0, 30.0, 32.0, 44.0, "gfswave"),
+    "Persian Gulf": (23.0, 31.0, 47.0, 57.0, "gfswave"),
+    "Hudson Bay": (50.5, 65.0, -96.0, -76.0, "gfswave"),
+}
+REGION_STEP = {"glwu": 0.1, "gfswave": 0.25}
 GLWU_FIELDS = {"HTSGW": "hs", "PERPW": "tp", "DIRPW": "dir", "WIND": "kt", "WDIR": "wind_from"}
 CHART_STEP_H = 3  # GFS's own step; WAVEWATCH III is hourly
 CHART_FIELDS = [("hs", 0.1), ("tp", 0.1), ("dir", 2), ("kt", 0.5), ("wind_from", 2)]  # name, units per byte step
@@ -272,32 +287,148 @@ def chart():
 
     now = _now()
     t0 = now.replace(hour=now.hour - now.hour % CHART_STEP_H)
-    stamp = f"{t0:%Y-%m-%dT%H}:00:00Z"
-    waves = _erddap("NWW3_Global_Best", ["Thgt", "Tper", "Tdir"],
+    times = np.array([np.datetime64(t0) + np.timedelta64(CHART_STEP_H * k, "h") for k in range(CHART_FRAMES)], dtype="datetime64[m]")
+    lat, lon = np.arange(-77.5, 77.6, 1.0), np.arange(0.0, 360.0, 1.0)
+    waves, regions = _gfswave_chart(times, lat, lon)
+    if waves is None:  # NOMADS down: CoastWatch's WAVEWATCH III, which leaves out most enclosed seas
+        stamp = f"{t0:%Y-%m-%dT%H}:00:00Z"
+        w = _erddap("NWW3_Global_Best", ["Thgt", "Tper", "Tdir"],
                     f"[({stamp}):{CHART_STEP_H}:last][(0.0)][(-77.5):2:(77.5)][(0.0):2:(359.5)]").squeeze("depth", drop=True)
+        times = w.time.values.astype("datetime64[m]")
+        waves = {"hs": w.Thgt.values, "tp": w.Tper.values, "dir": w.Tdir.values % 360}
+    stamp = f"{t0:%Y-%m-%dT%H}:00:00Z"
     wind = _erddap("NCEP_Global_Best", ["ugrd10m", "vgrd10m", "tmp2m", "pratesfc"], f"[({stamp}):{CHART_STEP_H // 3}:last][(77.5):2:(-77.5)][(0.0):2:(359.5)]")
-    wind = wind.sortby("latitude").sel(time=waves.time, method="nearest", tolerance=np.timedelta64(90, "m"))
+    wind = wind.sortby("latitude").sel(time=times, method="nearest", tolerance=np.timedelta64(90, "m"))
     u, v = wind.ugrd10m.values, wind.vgrd10m.values
     _GFS.update(air=wind.tmp2m.values - 273.15, rain=wind.pratesfc.values * 3600)  # K -> °C, kg m-2 s-1 -> mm an hour
-    fields = {"hs": waves.Thgt.values, "tp": waves.Tper.values, "dir": waves.Tdir.values % 360,
-              "kt": np.hypot(u, v) * KT, "wind_from": np.degrees(np.arctan2(-u, -v)) % 360}
-    with np.errstate(invalid="ignore"):
-        cube = np.stack([np.where(np.isfinite(fields[n]), np.clip(np.round(fields[n] / step), 0, 254), 255)
-                         for n, step in CHART_FIELDS], axis=1).astype(np.uint8)  # [time][field][lat][lon]
-    lat, lon = waves.latitude.values, waves.longitude.values
+    fields = {**waves, "kt": np.hypot(u, v) * KT, "wind_from": np.degrees(np.arctan2(-u, -v)) % 360}
+    cube = np.stack([_bytes(fields[n], step) for n, step in CHART_FIELDS], axis=1)  # [time][field][lat][lon]
     MAP_DATA.write_text(base64.b64encode(gzip.compress(cube.tobytes(), 9)).decode())
+    regions += [r for r in [_glwu_region(times)] if r]
     try:
-        basin = _chart_basins(waves.time.values)
+        basin = _chart_basins(times)
     except Exception as e:  # rate limits, outages: the chart still has the open ocean
         print(f"  enclosed seas left out: {type(e).__name__}: {str(e)[:120]}", flush=True)
         basin = None
     MAP_JSON.write_text(json.dumps(dict(
-        generated=now.isoformat() + "Z", sources={"waves": "NOAA WAVEWATCH III (NWW3_Global_Best)", "wind": "NCEP GFS (NCEP_Global_Best)",
-                                                  "enclosed seas": "Open-Meteo marine forecast"},
-        times=[str(np.datetime64(t, "m")) + "Z" for t in waves.time.values], lat0=float(lat[0]), lon0=float(lon[0]),
-        step=float(lat[1] - lat[0]), nlat=len(lat), nlon=len(lon), fields=CHART_FIELDS, basin=basin), separators=(",", ":")))
-    print(f"swell chart: {cube.shape[0]} times, {len(lat)} x {len(lon)} grid; wrote {MAP_DATA} "
-          f"({MAP_DATA.stat().st_size / 1e6:.1f} MB)", flush=True)
+        generated=now.isoformat() + "Z", sources={"waves": "NOAA GFS-Wave (NOMADS)", "wind": "NCEP GFS (NCEP_Global_Best)",
+                                                  "Great Lakes": "NOAA GLWU", "Black Sea, Caspian": "Open-Meteo marine forecast"},
+        times=[str(t) + "Z" for t in times], lat0=float(lat[0]), lon0=float(lon[0]), step=1.0, nlat=len(lat), nlon=len(lon),
+        fields=CHART_FIELDS, basin=basin, regions=regions), separators=(",", ":")))
+    print(f"swell chart: {cube.shape[0]} times, {len(lat)} x {len(lon)} grid, regions {[r['name'] for r in regions]}; "
+          f"wrote {MAP_DATA} ({MAP_DATA.stat().st_size / 1e6:.1f} MB)", flush=True)
+
+
+def _bytes(v, step):
+    with np.errstate(invalid="ignore"):
+        return np.where(np.isfinite(v), np.clip(np.round(v / step), 0, 254), 255).astype(np.uint8)
+
+
+def _region_dict(name, lat0, lon0, step, cube):
+    import base64
+    import gzip
+
+    return dict(name=name, lat0=round(float(lat0), 4), lon0=round(float(lon0), 4), step=step, nlat=cube.shape[2], nlon=cube.shape[3],
+                data=base64.b64encode(gzip.compress(cube.tobytes(), 9)).decode())
+
+
+def _gfswave_chart(times, lat, lon):
+    """GFS-Wave's latest run at the chart's times: ({hs, tp, dir} on the 1° chart grid [time, lat, lon],
+    the CHART_REGIONS it covers at 0.25°), or (None, []) if NOMADS has no run. Only the three fields'
+    bytes are fetched from each forecast hour's file, by its index; one file at a time, so memory stays small."""
+    import re
+    import tempfile
+
+    import eccodes
+
+    s = requests.Session()
+    s.headers["User-Agent"] = "surf_tools (https://github.com/jonchaconas/surf_tools)"
+    try:
+        run = None
+        for day in sorted(set(re.findall(r"gfs\.(\d{8})/", s.get(f"{GFSWAVE}/", timeout=60).text)), reverse=True):
+            for cycle in sorted(set(re.findall(r'href="(\d{2})/"', s.get(f"{GFSWAVE}/gfs.{day}/", timeout=60).text)), reverse=True):
+                cyc_t = np.datetime64(f"{day[:4]}-{day[4:6]}-{day[6:]}T{cycle}:00")
+                last = int((times[-1] - cyc_t) / np.timedelta64(1, "h"))
+                if s.head(f"{GFSWAVE}/gfs.{day}/{cycle}/wave/gridded/gfswave.t{cycle}z.global.0p25.f{last:03d}.grib2.idx", timeout=60).ok:
+                    run = (day, cycle, cyc_t)
+                    break
+            if run:
+                break
+        if run is None or (times[0] - run[2]) < np.timedelta64(0, "h"):
+            return None, []
+        day, cycle, cyc_t = run
+        out = {n: np.full((len(times), len(lat), len(lon)), np.nan, np.float32) for n in ("hs", "tp", "dir")}
+        boxes = {name: b for name, b in CHART_REGIONS.items() if b[4] == "gfswave"}
+        cubes, axes = {}, None
+        for k, t in enumerate(times):
+            fh = int((t - cyc_t) / np.timedelta64(1, "h"))
+            url = f"{GFSWAVE}/gfs.{day}/{cycle}/wave/gridded/gfswave.t{cycle}z.global.0p25.f{fh:03d}.grib2"
+            idx = [line.split(":") for line in s.get(url + ".idx", timeout=60).text.splitlines()]
+            want = [i for i, e in enumerate(idx) if e[3] in ("HTSGW", "PERPW", "DIRPW")]
+            end = int(idx[want[-1] + 1][1]) - 1 if want[-1] + 1 < len(idx) else ""
+            r = s.get(url, headers={"Range": f"bytes={idx[want[0]][1]}-{end}"}, timeout=120)
+            r.raise_for_status()
+            with tempfile.TemporaryFile() as f:
+                f.write(r.content)
+                f.seek(0)
+                for _ in range(want[-1] - want[0] + 1):
+                    h = eccodes.codes_grib_new_from_file(f)
+                    try:
+                        name = {"swh": "hs", "perpw": "tp", "dirpw": "dir"}.get(eccodes.codes_get(h, "shortName"))
+                        if axes is None:
+                            nj, ni = eccodes.codes_get(h, "Nj"), eccodes.codes_get(h, "Ni")
+                            g_lat = eccodes.codes_get_array(h, "latitudes").reshape(nj, ni)[:, 0]
+                            g_lon = eccodes.codes_get_array(h, "longitudes").reshape(nj, ni)[0] % 360
+                            axes = (nj, ni, g_lat, g_lon)
+                        if name is None:
+                            continue
+                        v = eccodes.codes_get_values(h)
+                        v = np.where(v == eccodes.codes_get(h, "missingValue"), np.nan, v).reshape(axes[0], axes[1])
+                    finally:
+                        eccodes.codes_release(h)
+                    nj, ni, g_lat, g_lon = axes
+                    rows = np.searchsorted(-g_lat, -lat)  # the 0.25° grid runs north to south
+                    out[name][k] = v[np.ix_(rows, np.searchsorted(g_lon, lon))]
+                    for rname, (la0, la1, lo0, lo1, _) in boxes.items():
+                        ri = np.flatnonzero((g_lat >= la0) & (g_lat <= la1))[::-1]  # south to north
+                        ci = np.flatnonzero(((g_lon - lo0 % 360) % 360) <= (lo1 - lo0))
+                        ci = ci[np.argsort((g_lon[ci] - lo0 % 360) % 360)]
+                        if rname not in cubes:
+                            cubes[rname] = (g_lat[ri[0]], ((g_lon[ci[0]] + 180) % 360) - 180, np.full((len(times), 3, len(ri), len(ci)), 255, np.uint8))
+                        cubes[rname][2][k, ["hs", "tp", "dir"].index(name)] = _bytes(v[np.ix_(ri, ci)], {"hs": 0.1, "tp": 0.1, "dir": 2}[name])
+            time.sleep(0.3)  # NOMADS allows about 120 requests a minute
+        out["dir"] = out["dir"] % 360
+        regions = [_region_dict(name, la, lo, 0.25, cube) for name, (la, lo, cube) in cubes.items()]
+        print(f"  GFS-Wave run {day} {cycle}z: {len(times)} steps", flush=True)
+        return out, regions
+    except Exception as e:
+        print(f"  GFS-Wave failed: {type(e).__name__}: {str(e)[:150]}", flush=True)
+        return None, []
+
+
+def _glwu_region(times):
+    """GLWU on a regular 0.1° grid over the Great Lakes at the chart's times, nearest of its water points within 0.06°."""
+    from scipy.spatial import cKDTree
+
+    g = _glwu()
+    if g is None:
+        return None
+    la0, la1, lo0, lo1, _ = CHART_REGIONS["Great Lakes"]
+    step = REGION_STEP["glwu"]
+    lats, lons = np.arange(la0, la1 + 1e-6, step), np.arange(lo0, lo1 + 1e-6, step)
+    gl, go = np.meshgrid(lats, lons, indexing="ij")
+    c = np.cos(np.radians(45))
+    d, near = cKDTree(np.c_[g["lat"], g["lon"] * c]).query(np.c_[gl.ravel(), go.ravel() * c])
+    wet = d <= 0.06
+    want = np.asarray(times, dtype="datetime64[m]")
+    pos = np.minimum(np.searchsorted(g["times"], want), len(g["times"]) - 1)
+    hit = g["times"][pos] == want
+    cube = np.full((len(want), 3, len(lats), len(lons)), 255, np.uint8)
+    for f, (name, step_v) in enumerate([("hs", 0.1), ("tp", 0.1), ("dir", 2)]):
+        vals = g[name][pos][:, near]  # [time, grid cell]
+        vals = np.where(wet[None, :] & hit[:, None], vals, np.nan)
+        cube[:, f] = _bytes(vals % 360 if name == "dir" else vals, step_v).reshape(len(want), len(lats), len(lons))
+    return _region_dict("Great Lakes", lats[0], lons[0], step, cube)
 
 
 def _chart_basins(times):

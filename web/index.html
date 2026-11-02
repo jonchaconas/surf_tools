@@ -213,7 +213,7 @@ ol.top .pc { font: 500 13px var(--data); font-variant-numeric: tabular-nums; }
         </div>
         <div class="legend" id="legend"></div>
         <div class="legend-labels" id="legendlabels"></div>
-        <div id="fcfoot" hidden style="margin-top:4px">Spots coloured by their forecast at that time, red to green (green is good by your criteria) · arrows show where the swell, or the wind, is heading · NOAA WAVEWATCH III and GFS, 1°, every 3 hours</div>
+        <div id="fcfoot" hidden style="margin-top:4px">Spots coloured by their forecast at that time, red to green (green is good by your criteria) · arrows show where the swell, or the wind, is heading · NOAA GFS-Wave and GFS, 1° (enclosed seas 0.25°, the Great Lakes 0.1° from NOAA's GLWU), every 3 hours</div>
         <div id="climfoot">
         <label class="row" for="minpct" style="margin-top:6px">Show spots good at least <span class="val" id="minpctv"></span><input type="range" id="minpct" min="0" max="80" step="5" value="10"></label>
         <div style="margin-top:4px">● named break &nbsp; ◆ under-the-radar &nbsp; ○ regional coast &nbsp; ✶ uncharted &nbsp; · surf spot (OSM) &nbsp; ▪ coast point &nbsp; <span class="buoykey"></span> live buoy &nbsp; <span class="swatch" style="background:var(--nodata)"></span>no data · click anywhere</div>
@@ -1201,7 +1201,8 @@ function loadChart() {  // once; null if there's no chart yet
   if (!chartLoading) chartLoading = Promise.all([json("data/fcmap.json"), bytes("data/fcmap.b64.txt")]).then(async ([m, buf]) => {
     swellChart = { ...m, data: new Uint8Array(buf), t: m.times.map(t => Date.parse(t)), at: Object.fromEntries(m.fields.map(([n], k) => [n, k])), planes: new Map(), between: new Map() };
     swellChart.stepH = (swellChart.t[1] - swellChart.t[0]) / 3600e3;  // the slider moves by the hour, fcStep in frames
-    if (m.basin) {  // the Great Lakes, Hudson Bay and other enclosed seas, at the map's own points there
+    swellChart.regions = await Promise.all((m.regions || []).map(async r => ({ ...r, data: new Uint8Array(await inflate(r.data)), planes: new Map() })));
+    if (m.basin) {  // the Black Sea and Caspian (and any sea without a region), at the map's own points there
       const cells = m.basin.cells;
       swellChart.basin = { cells, data: new Uint8Array(await inflate(m.basin.data)), lat: cells.map(c => meta.cells.lat[c]), lon: cells.map(c => meta.cells.lon[c]) };
     }
@@ -1283,7 +1284,44 @@ function basinSample(t, name, lat, lon) {  // the nearest enclosed-sea point wit
   b.cells.forEach((cell, k) => { const d = (b.lat[k] - lat) ** 2 + (((b.lon[k] - lon + 540) % 360) - 180) ** 2 * cl; if (d < bd && v[cell] === v[cell]) { bd = d; best = v[cell]; } });
   return best;
 }
-function chartSample(t, name, lat, lon) {  // the ocean grid, or the enclosed seas it leaves out
+// Enclosed seas at their model's own grid (fcmap.json regions: GLWU 0.1° for the Great Lakes, GFS-Wave 0.25°).
+const REGION_FIELDS = { hs: [0, 0.1], tp: [1, 0.1], dir: [2, 2] };
+function regionPlane(g, t, name) {  // one field of a region at time t (fractional: blended), floats, NaN off its water
+  const key = `${t}:${name}`;
+  if (g.planes.has(key)) return g.planes.get(key);
+  const n = g.nlat * g.nlon, v = new Float32Array(n);
+  if (name === "power") { const hs = regionPlane(g, t, "hs"), tp = regionPlane(g, t, "tp"); for (let q = 0; q < n; q++) v[q] = KJ(hs[q], tp[q]); }
+  else if (t % 1) {
+    const k = Math.floor(t), f = t - k;
+    if (name === "dir") return regionPlane(g, Math.round(t), name);
+    const a = regionPlane(g, k, name), b = regionPlane(g, Math.min(k + 1, swellChart.t.length - 1), name);
+    for (let q = 0; q < n; q++) v[q] = a[q] !== a[q] ? b[q] : b[q] !== b[q] ? a[q] : a[q] + (b[q] - a[q]) * f;
+  } else {
+    const [fi, step] = REGION_FIELDS[name], off = (t * 3 + fi) * n;
+    for (let q = 0; q < n; q++) { const x = g.data[off + q]; v[q] = x === 255 ? NaN : x * step; }
+  }
+  g.planes.set(key, v);
+  if (g.planes.size > 60) g.planes.delete(g.planes.keys().next().value);
+  return v;
+}
+function regionSample(t, name, lat, lon) {  // bilinear inside a region's water (nearest for a direction), else NaN
+  if (!REGION_FIELDS[name] && name !== "power") return NaN;
+  for (const g of swellChart?.regions || []) {
+    const fi = (lat - g.lat0) / g.step, fj = ((((lon - g.lon0) % 360) + 360) % 360) / g.step;
+    if (fi < 0 || fi > g.nlat - 1 || fj < 0 || fj > g.nlon - 1) continue;
+    const v = regionPlane(g, t, name);
+    if (name === "dir") { const x = v[Math.round(fi) * g.nlon + Math.round(fj)]; if (x === x) return x; continue; }
+    const i0 = Math.min(g.nlat - 2, Math.floor(fi)), j0 = Math.min(g.nlon - 2, Math.floor(fj)), a = fi - i0, b = fj - j0;
+    let sum = 0, w = 0;
+    for (const [q, wq] of [[i0 * g.nlon + j0, (1 - a) * (1 - b)], [i0 * g.nlon + j0 + 1, (1 - a) * b], [(i0 + 1) * g.nlon + j0, a * (1 - b)], [(i0 + 1) * g.nlon + j0 + 1, a * b]])
+      if (v[q] === v[q]) { sum += v[q] * wq; w += wq; }
+    if (w >= 0.25) return sum / w;
+  }
+  return NaN;
+}
+function chartSample(t, name, lat, lon) {  // an enclosed sea's own grid, else the ocean grid, else the enclosed-sea points
+  const r = regionSample(t, name, lat, lon);
+  if (r === r) return r;
   const v = gridSample(t, name, lat, lon);
   return v === v || name === "kt" || name === "wind_from" ? v : basinSample(t, name, lat, lon);
 }
@@ -1325,9 +1363,22 @@ function computeChartField() {  // the chosen field at the chosen time on the 0.
     for (let k = 0; k < pix.length; k++) {
       let sum = 0, tw = 0;
       for (let q = 4 * k; q < 4 * k + 4; q++) { const v = bp[nb[q]]; if (w[q] > 0 && v === v) { sum += v * w[q]; tw += w[q]; } }
-      put(pix[k], tw ? sum / tw : NaN);
+      if (tw) put(pix[k], sum / tw);  // where the points have nothing, the ocean grid's value stands
     }
-    for (let c = 0; c < R.pix.length; c++) { const cell = R.sources[R.src[c]]; if (meta.cells.enclosed[cell]) put(R.pix[c], bp[cell]); }
+    for (let c = 0; c < R.pix.length; c++) { const cell = R.sources[R.src[c]]; if (meta.cells.enclosed[cell] && bp[cell] === bp[cell]) put(R.pix[c], bp[cell]); }
+  }
+  if (name !== "kt") for (const g of swellChart.regions || []) {  // enclosed seas at their own grid, over the rest
+    const i0 = Math.max(0, Math.floor((g.lat0 + 90) / res)), i1 = Math.min(nlat - 1, Math.ceil((g.lat0 + (g.nlat - 1) * g.step + 90) / res));
+    const j0 = Math.floor((g.lon0 + 180) / res), j1 = Math.ceil((g.lon0 + (g.nlon - 1) * g.step + 180) / res);
+    for (let i = i0; i <= i1; i++) {
+      const lat = -90 + (i + 0.5) * res;
+      for (let jj = j0; jj <= j1; jj++) {
+        const j = ((jj % nlon) + nlon) % nlon, q = i * nlon + j;
+        if (cat[q] === 3) continue;
+        const v = regionSample(fcStep, name, lat, -180 + (j + 0.5) * res);
+        if (v === v) FF[q] = Math.min(100, (100 * fcShown(v)) / top);
+      }
+    }
   }
   fieldKey = "";
 }
@@ -1536,11 +1587,9 @@ function draw() {
         const r = 2.6 / k;
         ctx.beginPath(); ctx.rect(g.xy[0] - r, g.xy[1] - r, 2 * r, 2 * r); ctx.fillStyle = colorFor(osmPct(g)) || css("--ink"); ctx.fill(); ctx.stroke();
       }
-      if (k >= 12) {
-        ctx.font = `400 ${10 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = css("--muted");
-        ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
-        for (const o of [...osm, ...gaps]) { if (!o.xy || !shown(osmPct(o))) continue; ctx.strokeText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); ctx.fillText(o.name, o.xy[0] + 4 / k, o.xy[1] + 3 / k); }
-      }
+      if (k >= 12)
+        labels(dpr, o, `400 10px ${css("--body").split(",")[0]}`, css("--muted"),
+          [...osm, ...gaps].flatMap(s => s.xy && shown(osmPct(s)) ? [[s.xy[0], s.xy[1], s.name]] : []), 4, 3);
     }
     if (document.getElementById("unch").checked && !forecasting) {  // uncharted picks as stars
       const r = Math.max(4, Math.min(8, 3.5 + k * 0.6)) / k;
@@ -1562,14 +1611,11 @@ function draw() {
         ctx.fillStyle = (fq ? fq[i] >= 0 && QUALITY[fq[i]][0] : colorFor(pointPct[i])) || css("--land"); ctx.fill();
         ctx.lineWidth = (p.kind === "coast" ? 1.4 : 1) / k; ctx.strokeStyle = ink; ctx.stroke();
       });
-      if (k >= 4) {  // names once zoomed in enough to have room
-        ctx.font = `500 ${11 / k}px ${css("--body").split(",")[0]}`; ctx.fillStyle = ink;
-        ctx.strokeStyle = css("--panel"); ctx.lineWidth = 3 / k; ctx.lineJoin = "round";
-        meta.points.forEach((p, i) => { const xy = pointXY[i]; if (!xy || (!forecasting && !shown(pointPct[i]))) return;
-          ctx.strokeText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); ctx.fillText(p.name, xy[0] + 7 / k, xy[1] + 4 / k); });
-      }
+      if (k >= 4)  // names once zoomed in enough to have room
+        labels(dpr, o, `500 11px ${css("--body").split(",")[0]}`, ink,
+          meta.points.flatMap((p, i) => pointXY[i] && (forecasting || shown(pointPct[i])) ? [[pointXY[i][0], pointXY[i][1], p.name]] : []), 7, 4);
     }
-    if (showBuoys && liveBuoys.length) drawBuoys(k);
+    if (showBuoys && liveBuoys.length) drawBuoys(k, o, dpr);
     if (trip) {  // the trip's reach
       ctx.beginPath(); path(d3.geoCircle().center([trip.lon, trip.lat]).radius(tripKm() / 111.2)());
       ctx.setLineDash([6 / k, 4 / k]); ctx.strokeStyle = css("--accent"); ctx.lineWidth = 1.5 / k; ctx.stroke(); ctx.setLineDash([]);
@@ -1610,7 +1656,25 @@ function setupBuoys(d) {
   draw();
 }
 const buoyMain = b => (b.swh != null ? { h: b.swh, t: b.swp, d: b.swd, what: "swell" } : { h: b.hs, t: b.dpd, d: b.mwd != null ? compass(b.mwd) : null, what: "waves" });
-function drawBuoys(k) {  // diamonds, with the swell (or all waves) as feet and seconds once zoomed in
+// Map labels are drawn in screen pixels at whole-pixel positions: text set at a fraction of a pixel
+// under the zoom's scale comes out blurred, worst on 1x screens.
+function labels(dpr, o, font, fill, items, dx, dy, avoid = false) {  // items: [base x, base y, text]
+  ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.font = font; ctx.lineJoin = "round"; ctx.lineWidth = 3; ctx.strokeStyle = css("--panel"); ctx.fillStyle = fill;
+  const taken = [];  // with avoid, a label that would overlap one already placed is left off
+  for (const [bx, by, text] of items) {
+    const x = Math.round(transform.applyX(bx + o) + dx), y = Math.round(transform.applyY(by) + dy);
+    if (x < -200 || x > W + 10 || y < -10 || y > H + 20) continue;
+    if (avoid) {
+      const box = [x, y - 10, x + ctx.measureText(text).width, y + 3];
+      if (taken.some(t => box[0] < t[2] && box[2] > t[0] && box[1] < t[3] && box[3] > t[1])) continue;
+      taken.push(box);
+    }
+    ctx.strokeText(text, x, y); ctx.fillText(text, x, y);
+  }
+  ctx.restore();
+}
+function drawBuoys(k, o, dpr) {  // diamonds, with the swell (or all waves) as feet and seconds once zoomed in
   const r = 3.4 / k, acc = css("--accent"), panel = css("--panel");
   ctx.lineWidth = 1.5 / k;
   for (const b of liveBuoys) {
@@ -1620,17 +1684,12 @@ function drawBuoys(k) {  // diamonds, with the swell (or all waves) as feet and 
     ctx.fillStyle = panel; ctx.fill(); ctx.strokeStyle = acc; ctx.stroke();
   }
   if (k < 3) return;
-  ctx.font = `600 ${10 / k}px ${css("--data").split(",")[0]}`; ctx.lineJoin = "round";
-  const taken = [];  // labels already placed: one that would overlap them is left off
+  const items = [];
   for (const b of liveBuoys) {
-    if (!b.xy) continue;
-    const m = buoyMain(b); if (m.h == null) continue;
-    const text = `${heightShort(m.h * FT)}${m.t ? " " + Math.round(m.t) + "s" : ""}`, x = b.xy[0] + 5 / k, y = b.xy[1] - 4 / k;
-    const box = [x, y - 9 / k, x + ctx.measureText(text).width, y + 2 / k];
-    if (taken.some(t => box[0] < t[2] && box[2] > t[0] && box[1] < t[3] && box[3] > t[1])) continue;
-    taken.push(box);
-    ctx.strokeStyle = panel; ctx.lineWidth = 3 / k; ctx.strokeText(text, x, y); ctx.fillStyle = acc; ctx.fillText(text, x, y);
+    const m = buoyMain(b);
+    if (b.xy && m.h != null) items.push([b.xy[0], b.xy[1], `${heightShort(m.h * FT)}${m.t ? " " + Math.round(m.t) + "s" : ""}`]);
   }
+  labels(dpr, o, `600 11px ${css("--data").split(",")[0]}`, css("--ink"), items, 6, -5, true);
 }
 document.getElementById("buoytoggle").onclick = e => { showBuoys = !showBuoys; e.target.setAttribute("aria-pressed", showBuoys); draw(); };
 function spark(hist) {  // the last day: all waves (ink) and swell (accent), feet against hours ago

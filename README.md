@@ -101,11 +101,12 @@ Breakout tables are listed by year-round consistency.
   arrows for where the swell or wind is heading and a time slider in the models' 3-hour steps (▶ plays
   it). The marked spots
   turn red to green by their own forecast at that time. The chart is a 1° grid every 3 hours from
-  NOAA WAVEWATCH III and NCEP GFS via NOAA CoastWatch ERDDAP (`chart()` in
-  [`surfmap/forecast.py`](surfmap/forecast.py)), refreshed by the daily job. WAVEWATCH III leaves
-  out the Great Lakes and Hudson Bay: the Great Lakes come from NOAA's Great Lakes wave model (GLWU,
-  2.5 km, from NOMADS, which also gives the lake breaks their forecast) and the other enclosed seas
-  from Open-Meteo's marine forecast, at the map's own points there.
+  NOAA's GFS-Wave (from NOMADS) and NCEP GFS wind (from CoastWatch) (`chart()` in
+  [`surfmap/forecast.py`](surfmap/forecast.py)), refreshed by the daily job. Enclosed seas come at
+  their model's own grid: GFS-Wave at 0.25° for the Mediterranean, Baltic, Red Sea, Persian Gulf and
+  Hudson Bay, and NOAA's Great Lakes wave model (GLWU, at 0.1°; it also gives the lake breaks their
+  forecast) for the Great Lakes. The Black Sea and Caspian are in neither NOAA model, so they rely
+  on Open-Meteo's marine forecast when it has quota.
 - **Land:** plain, or satellite imagery (Sentinel-2 cloudless by EOX, CC BY-NC-SA 4.0) clipped to
   the coastline.
 - **Plan a trip:** pick a starting point and a reach. The best breaks within it are ranked for
